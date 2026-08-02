@@ -70,3 +70,21 @@
 .tr-reg-amt.is-neg { color: var(--text-error); }
 .tr-reg-amt.is-pos { color: var(--color-green, #3a7a3a); }
 .tr-reg-run { font-size: 0.72rem; }
+/* reconcile + import */
+.tr-reg-actions { display: flex; gap: 6px; }
+.tr-reconcile-diff { margin: 4px 0 8px; font-size: 0.86rem; }
+.tr-reconcile-diff.is-off { color: var(--text-error); }
+.tr-import-paste { width: 100%; margin: 8px 0; font-family: var(--font-monospace); font-size: 0.78rem; resize: vertical; }
+.tr-import-body { margin-top: 10px; }
+.tr-import-list { display: flex; flex-direction: column; max-height: 40vh; overflow-y: auto; margin: 8px 0; }
+.tr-import-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 4px; border-bottom: 1px solid var(--background-modifier-border); }
+.tr-import-row.is-dup { opacity: 0.5; }
+.tr-import-payee { font-size: 0.88rem; }
+.tr-import-sub { font-size: 0.7rem; color: var(--text-muted); }
+.tr-import-amt { font-variant-numeric: tabular-nums; font-weight: 600; }
+.tr-import-amt.is-neg { color: var(--text-error); }
+.tr-import-amt.is-pos { color: var(--color-green, #3a7a3a); }
+.tr-import input[type="file"] { display: block; margin: 8px 0; }
+.tr-import .tr-primary, .tr-import .tr-btn { margin-top: 8px; }
+.tr-acct-actions { display: flex; gap: 8px; }
+.tr-acct-actions .tr-add-row { flex: 1; }

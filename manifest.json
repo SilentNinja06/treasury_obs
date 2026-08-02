@@ -1,7 +1,7 @@
 {
 	"id": "treasury",
 	"name": "MERIDIAN Treasury",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"minAppVersion": "1.4.0",
 	"description": "Envelope / zero-based budgeting, double-entry accounts, and net worth — Obsidian-native, sync-safe across iPhone and desktop, your data in an open portable format. No bank connection, import only.",
 	"author": "SilentNinja06",

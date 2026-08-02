@@ -27,7 +27,7 @@ __export(main_exports, {
   default: () => TreasuryPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian8 = require("obsidian");
+var import_obsidian10 = require("obsidian");
 
 // ../../packages/ui/dist/constants.js
 var CLS = "mrd";
@@ -111,7 +111,7 @@ function scopeEl(el, opts = {}) {
 }
 
 // src/view.ts
-var import_obsidian7 = require("obsidian");
+var import_obsidian9 = require("obsidian");
 
 // ../../packages/ledger/dist/money.js
 var CURRENCIES = {
@@ -209,7 +209,8 @@ function emptySnapshot(baseCurrency = "USD", firstMonth = monthOf(todayISO())) {
     targets: [],
     holdings: [],
     prices: [],
-    fx: []
+    fx: [],
+    importProfiles: []
   };
 }
 function todayISO() {
@@ -436,6 +437,237 @@ function netWorth(snapshot, asOf) {
   return total;
 }
 
+// ../../packages/ledger/dist/import.js
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else
+          inQuotes = false;
+      } else
+        field += ch;
+      continue;
+    }
+    if (ch === '"')
+      inQuotes = true;
+    else if (ch === ",") {
+      row.push(field);
+      field = "";
+    } else if (ch === "\r") {
+    } else if (ch === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else
+      field += ch;
+  }
+  if (field.length || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((c) => c.trim() !== ""));
+}
+function parseDate(raw, order = "auto") {
+  const s = raw.trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m)
+    return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
+  m = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})$/);
+  if (m) {
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    const year = m[3].length === 2 ? 2e3 + Number(m[3]) : Number(m[3]);
+    let mo, da;
+    if (order === "DMY")
+      [da, mo] = [a, b];
+    else if (order === "YMD")
+      return null;
+    else if (order === "MDY")
+      [mo, da] = [a, b];
+    else
+      [mo, da] = a > 12 ? [b, a] : [a, b];
+    if (mo < 1 || mo > 12 || da < 1 || da > 31)
+      return null;
+    return `${year}-${pad(mo)}-${pad(da)}`;
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+function pad(v) {
+  return String(v).padStart(2, "0");
+}
+function fingerprint(parts) {
+  let h = 5381;
+  const str = parts.join("|");
+  for (let i = 0; i < str.length; i++)
+    h = (h << 5) + h + str.charCodeAt(i) | 0;
+  return "imp_" + (h >>> 0).toString(36);
+}
+function indexer(header) {
+  const norm = header.map((h) => h.trim().toLowerCase());
+  return (name) => norm.indexOf(name.trim().toLowerCase());
+}
+function importYnabRegister(text, currency) {
+  var _a, _b;
+  const rows = parseCsv(text);
+  if (rows.length < 2)
+    return [];
+  const at = indexer(rows[0]);
+  const cAccount = at("account");
+  const cDate = at("date");
+  const cPayee = at("payee");
+  const cMemo = at("memo");
+  const cOut = at("outflow");
+  const cIn = at("inflow");
+  const cCombined = at("category group/category");
+  const cGroup = at("category group");
+  const cCat = at("category");
+  const cCleared = at("cleared");
+  const out = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const date = parseDate(get(r, cDate), "MDY");
+    if (!date)
+      continue;
+    const outflow = (_a = parseMoney(get(r, cOut), currency)) !== null && _a !== void 0 ? _a : 0;
+    const inflow = (_b = parseMoney(get(r, cIn), currency)) !== null && _b !== void 0 ? _b : 0;
+    const amount = Math.abs(inflow) - Math.abs(outflow);
+    const payeeRaw = get(r, cPayee);
+    const accountName = get(r, cAccount);
+    let transferAccountName;
+    let payee = payeeRaw;
+    const tm = payeeRaw.match(/^transfer\s*:\s*(.+)$/i);
+    if (tm) {
+      transferAccountName = tm[1].trim();
+      payee = "";
+    }
+    const categoryName = cCombined >= 0 ? get(r, cCombined) : cGroup >= 0 && cCat >= 0 ? `${get(r, cGroup)}: ${get(r, cCat)}`.replace(/^:\s*/, "") : get(r, cCat);
+    out.push({
+      date,
+      accountName,
+      payee,
+      categoryName: categoryName || void 0,
+      memo: get(r, cMemo) || void 0,
+      amount,
+      transferAccountName,
+      importId: fingerprint([date, accountName, payeeRaw, amount])
+    });
+    void cCleared;
+  }
+  return out;
+}
+function importYnabBudget(text, currency) {
+  var _a;
+  const rows = parseCsv(text);
+  if (rows.length < 2)
+    return [];
+  const at = indexer(rows[0]);
+  const cMonth = at("month");
+  const cGroup = at("category group");
+  const cCat = at("category");
+  const cBudget = at("budgeted");
+  const out = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const assigned = parseMoney(get(r, cBudget), currency);
+    if (assigned == null || assigned === 0)
+      continue;
+    const iso = (_a = parseDate(get(r, cMonth), "auto")) !== null && _a !== void 0 ? _a : normalizeMonth(get(r, cMonth));
+    if (!iso)
+      continue;
+    out.push({ month: monthOf(iso), categoryName: `${get(r, cGroup)}: ${get(r, cCat)}`.replace(/^:\s*/, ""), assigned });
+  }
+  return out;
+}
+function normalizeMonth(s) {
+  const m = s.trim().match(/^([A-Za-z]{3,})\s+(\d{4})$/);
+  if (m) {
+    const mo = (/* @__PURE__ */ new Date(`${m[1]} 1, ${m[2]}`)).getMonth();
+    if (!isNaN(mo))
+      return `${m[2]}-${pad(mo + 1)}-01`;
+  }
+  const ym = s.trim().match(/^(\d{4})-(\d{1,2})/);
+  if (ym)
+    return `${ym[1]}-${pad(ym[2])}-01`;
+  return null;
+}
+function importMappedCsv(text, profile, currency) {
+  var _a, _b, _c, _d;
+  const rows = parseCsv(text);
+  if (rows.length < 2)
+    return [];
+  const at = indexer(rows[0]);
+  const col = (name) => name ? at(name) : -1;
+  const cDate = col(profile.map.date);
+  const cPayee = col(profile.map.payee);
+  const cMemo = col(profile.map.memo);
+  const cCat = col(profile.map.category);
+  const cAmount = col(profile.map.amount);
+  const cOut = col(profile.map.outflow);
+  const cIn = col(profile.map.inflow);
+  const account = (_a = profile.accountName) !== null && _a !== void 0 ? _a : "Imported";
+  const out = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const date = parseDate(get(r, cDate), profile.dateFormat);
+    if (!date)
+      continue;
+    let amount;
+    if (cAmount >= 0)
+      amount = (_b = parseMoney(get(r, cAmount), currency)) !== null && _b !== void 0 ? _b : 0;
+    else
+      amount = Math.abs((_c = parseMoney(get(r, cIn), currency)) !== null && _c !== void 0 ? _c : 0) - Math.abs((_d = parseMoney(get(r, cOut), currency)) !== null && _d !== void 0 ? _d : 0);
+    if (amount === 0)
+      continue;
+    const payee = get(r, cPayee);
+    out.push({
+      date,
+      accountName: account,
+      payee,
+      categoryName: get(r, cCat) || void 0,
+      memo: get(r, cMemo) || void 0,
+      amount,
+      importId: fingerprint([date, account, payee, amount])
+    });
+  }
+  return out;
+}
+function get(row, idx) {
+  return idx >= 0 && idx < row.length ? row[idx].trim() : "";
+}
+function dedupe(candidates, existing, accountNameById) {
+  var _a;
+  const seen = /* @__PURE__ */ new Set();
+  for (const t of existing) {
+    if (t.importId)
+      seen.add(t.importId);
+    const amount = t.postings.reduce((s, p) => s + p.amount, 0);
+    seen.add(fingerprint([t.date, accountNameById(t.accountId), (_a = t.payee) !== null && _a !== void 0 ? _a : "", amount]));
+  }
+  const fresh = [];
+  const duplicates = [];
+  const within = /* @__PURE__ */ new Set();
+  for (const c of candidates) {
+    const key = c.importId;
+    if (seen.has(key) || within.has(key))
+      duplicates.push(c);
+    else {
+      fresh.push(c);
+      within.add(key);
+    }
+  }
+  return { fresh, duplicates };
+}
+
 // ../../packages/ledger/dist/format/json.js
 var ROOT = "Finances";
 function j(v) {
@@ -461,7 +693,8 @@ var JsonFormat = class {
       scheduled: s.scheduled,
       targets: s.targets,
       holdings: s.holdings,
-      fx: s.fx
+      fx: s.fx,
+      importProfiles: s.importProfiles
     };
     files[`${ROOT}/config.md`] = j(config);
     const txByMonth = /* @__PURE__ */ new Map();
@@ -490,7 +723,7 @@ var JsonFormat = class {
     return files;
   }
   parse(files) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
     const configRaw = files[`${ROOT}/config.md`];
     const snap = emptySnapshot();
     if (configRaw) {
@@ -508,7 +741,8 @@ var JsonFormat = class {
         snap.targets = (_k = c.targets) !== null && _k !== void 0 ? _k : [];
         snap.holdings = (_l = c.holdings) !== null && _l !== void 0 ? _l : [];
         snap.fx = (_m = c.fx) !== null && _m !== void 0 ? _m : [];
-      } catch (_o) {
+        snap.importProfiles = (_o = c.importProfiles) !== null && _o !== void 0 ? _o : [];
+      } catch (_p) {
       }
     }
     for (const [path, content] of Object.entries(files)) {
@@ -520,7 +754,7 @@ var JsonFormat = class {
         } else if (path === `${ROOT}/prices.md`) {
           snap.prices.push(...JSON.parse(content));
         }
-      } catch (_p) {
+      } catch (_q) {
       }
     }
     return snap;
@@ -694,6 +928,99 @@ function addGroup(app, name) {
 function addCategory(app, groupId, name) {
   return mutate(app, (s) => {
     s.categories.push({ id: newId("cat"), groupId, name: name.trim(), order: s.categories.length, kind: "spending" });
+  });
+}
+function reconcileAccount(app, accountId, statementMinor) {
+  return mutate(app, (s) => {
+    const acc = s.accounts.find((a) => a.id === accountId);
+    if (!acc) return;
+    const cleared = clearedBalance(s, accountId);
+    const diff = statementMinor - cleared;
+    if (diff !== 0) {
+      s.transactions.push({
+        id: newId("tx"),
+        date: todayISO(),
+        accountId,
+        payee: "Reconciliation Balance Adjustment",
+        status: "reconciled",
+        postings: [{ amount: diff }]
+      });
+    }
+    for (const t of s.transactions) {
+      if (t.accountId === accountId && t.status === "cleared") t.status = "reconciled";
+    }
+  });
+}
+function splitCategory(full) {
+  const i = full.indexOf(":");
+  if (i >= 0) return [full.slice(0, i).trim(), full.slice(i + 1).trim()];
+  return ["", full.trim()];
+}
+function commitImport(app, candidates, assignments) {
+  return mutate(app, (s) => {
+    const ensureAccount = (name) => {
+      const key = name.trim().toLowerCase();
+      let a = s.accounts.find((x) => x.name.trim().toLowerCase() === key);
+      if (!a) {
+        a = { id: newId("acc"), name: name.trim(), role: "cash", currency: s.baseCurrency };
+        s.accounts.push(a);
+      }
+      return a;
+    };
+    const ensureGroup = (name) => {
+      const key = name.trim().toLowerCase();
+      let g = s.groups.find((x) => x.name.trim().toLowerCase() === key);
+      if (!g) {
+        g = { id: newId("grp"), name: name.trim(), order: s.groups.length };
+        s.groups.push(g);
+      }
+      return g;
+    };
+    const ensureCategory = (full) => {
+      const isIncome = /inflow|ready to assign/i.test(full);
+      const [grp, cat] = splitCategory(full);
+      const group = ensureGroup(grp || (isIncome ? "Income" : "Imported"));
+      const key = cat.toLowerCase();
+      let c = s.categories.find((x) => x.groupId === group.id && x.name.toLowerCase() === key);
+      if (!c) {
+        c = { id: newId("cat"), groupId: group.id, name: cat, order: s.categories.length, kind: isIncome ? "income" : "spending" };
+        s.categories.push(c);
+      }
+      return c;
+    };
+    for (const cand of candidates) {
+      if (cand.transferAccountName && cand.amount > 0) continue;
+      const acc = ensureAccount(cand.accountName);
+      const posting = cand.transferAccountName ? { transferAccountId: ensureAccount(cand.transferAccountName).id, amount: cand.amount } : cand.categoryName ? { categoryId: ensureCategory(cand.categoryName).id, amount: cand.amount } : { amount: cand.amount };
+      s.transactions.push({
+        id: newId("tx"),
+        date: cand.date,
+        accountId: acc.id,
+        payee: cand.payee || void 0,
+        memo: cand.memo || void 0,
+        status: "cleared",
+        importId: cand.importId,
+        postings: [posting]
+      });
+    }
+    for (const a of assignments != null ? assignments : []) {
+      const c = ensureCategory(a.categoryName);
+      const ex = s.assignments.find((x) => x.month === a.month && x.categoryId === c.id);
+      if (ex) ex.assigned = a.assigned;
+      else s.assignments.push({ month: a.month, categoryId: c.id, assigned: a.assigned });
+    }
+    const dates = s.transactions.map((t) => t.date).sort();
+    if (dates.length) {
+      const earliest = dates[0].slice(0, 7);
+      if (!s.firstMonth || earliest < s.firstMonth) s.firstMonth = earliest;
+    }
+  });
+}
+function saveImportProfile(app, profile) {
+  return mutate(app, (s) => {
+    const i = s.importProfiles.findIndex((p) => p.id === profile.id || p.name === profile.name);
+    if (i >= 0) s.importProfiles[i] = profile;
+    else s.importProfiles.push(profile);
   });
 }
 
@@ -1017,6 +1344,63 @@ var TransactionModal = class extends BottomSheetModal {
   }
 };
 
+// src/reconcile-modal.ts
+var import_obsidian6 = require("obsidian");
+var ReconcileModal = class extends BottomSheetModal {
+  constructor(app, accountId, onDone) {
+    super(app);
+    this.accountId = accountId;
+    this.onDone = onDone;
+    this.text = "";
+  }
+  renderBody(root) {
+    scopeEl(root);
+    root.addClass("tr-reconcile");
+    this.titleEl.setText("Reconcile");
+    void this.build(root);
+  }
+  async build(root) {
+    const s = await loadSnapshot(this.app);
+    const acc = s.accounts.find((a) => a.id === this.accountId);
+    if (!acc) {
+      root.createDiv({ cls: "tr-muted", text: "Account not found." });
+      return;
+    }
+    const cleared = clearedBalance(s, this.accountId);
+    root.createDiv({ cls: "tr-muted", text: `${acc.name} \u2014 cleared balance here is ${formatMoney(cleared, acc.currency)}.` });
+    const diffEl = root.createDiv({ cls: "tr-reconcile-diff" });
+    const update = () => {
+      const stmt = parseMoney(this.text, acc.currency);
+      if (stmt == null) {
+        diffEl.setText("");
+        return;
+      }
+      const diff = stmt - cleared;
+      diffEl.setText(diff === 0 ? "Matches \u2014 no adjustment needed." : `Difference: ${formatMoney(diff, acc.currency, { signed: true })} (an adjustment will be booked).`);
+      diffEl.toggleClass("is-off", diff !== 0);
+    };
+    new import_obsidian6.Setting(root).setName("Statement cleared balance").addText((t) => {
+      t.inputEl.inputMode = "decimal";
+      t.setPlaceholder("from your statement").onChange((v) => {
+        this.text = v;
+        update();
+      });
+    });
+    root.createEl("button", { cls: "tr-primary", text: "Reconcile" }).addEventListener("click", () => void this.submit(acc.currency));
+  }
+  async submit(currency) {
+    const stmt = parseMoney(this.text, currency);
+    if (stmt == null) {
+      new import_obsidian6.Notice("Enter the statement balance.");
+      return;
+    }
+    await reconcileAccount(this.app, this.accountId, stmt);
+    new import_obsidian6.Notice("Reconciled.");
+    this.onDone();
+    this.close();
+  }
+};
+
 // src/register.ts
 var RegisterModal = class extends BottomSheetModal {
   constructor(app, accountId, onChange) {
@@ -1072,7 +1456,12 @@ var RegisterModal = class extends BottomSheetModal {
     const bals = head.createDiv({ cls: "tr-reg-bals" });
     bals.createDiv({ cls: "tr-reg-bal", text: formatMoney(accountBalance(s, this.accountId), cur) });
     bals.createDiv({ cls: "tr-muted", text: "working balance" });
-    head.createEl("button", { cls: "tr-primary", text: "\uFF0B Add" }).addEventListener(
+    const headActions = head.createDiv({ cls: "tr-reg-actions" });
+    headActions.createEl("button", { cls: "tr-btn", text: "Reconcile" }).addEventListener(
+      "click",
+      () => new ReconcileModal(this.app, this.accountId, () => void this.refresh()).open()
+    );
+    headActions.createEl("button", { cls: "tr-primary", text: "\uFF0B Add" }).addEventListener(
       "click",
       () => new TransactionModal(this.app, () => void this.refresh(), void 0, this.accountId).open()
     );
@@ -1085,7 +1474,7 @@ var RegisterModal = class extends BottomSheetModal {
       const row = list.createDiv({ cls: "tr-reg-row" + (r.tx.status === "uncleared" ? " is-uncleared" : "") });
       row.addEventListener("click", () => new TransactionModal(this.app, () => void this.refresh(), r.tx, this.accountId).open());
       const left = row.createDiv({ cls: "tr-reg-left" });
-      left.createDiv({ cls: "tr-reg-payee", text: r.tx.payee || r.label || "\u2014" });
+      left.createDiv({ cls: "tr-reg-payee", text: (r.tx.status === "reconciled" ? "\u{1F512} " : "") + (r.tx.payee || r.label || "\u2014") });
       left.createDiv({ cls: "tr-reg-sub", text: `${r.tx.date} \xB7 ${r.label}` });
       const right = row.createDiv({ cls: "tr-reg-right" });
       right.createDiv({ cls: "tr-reg-amt " + (r.amount < 0 ? "is-neg" : "is-pos"), text: formatMoney(r.amount, cur, { signed: true }) });
@@ -1103,8 +1492,217 @@ function describe(t, catName, acctName) {
   return (_c = t.memo) != null ? _c : "\u2014";
 }
 
+// src/import-modal.ts
+var import_obsidian7 = require("obsidian");
+var ImportModal = class extends BottomSheetModal {
+  constructor(app, onDone) {
+    super(app);
+    this.onDone = onDone;
+    this.source = "ynab-register";
+    this.raw = "";
+    // generic-CSV mapping state
+    this.headers = [];
+    this.map = { date: "" };
+    this.dateFormat = "auto";
+    this.accountName = "Imported";
+    this.profileName = "";
+  }
+  renderBody(root) {
+    scopeEl(root);
+    root.addClass("tr-import");
+    this.titleEl.setText("Import transactions");
+    void this.init(root);
+  }
+  async init(root) {
+    this.snapshot = await loadSnapshot(this.app);
+    new import_obsidian7.Setting(root).setName("Source").addDropdown((d) => {
+      d.addOption("ynab-register", "YNAB register (Register.csv)");
+      d.addOption("ynab-budget", "YNAB budget (Budget.csv)");
+      d.addOption("csv", "Generic CSV (map columns)");
+      d.setValue(this.source).onChange((v) => {
+        this.source = v;
+        this.repaint();
+      });
+    });
+    const file = root.createEl("input", { attr: { type: "file", accept: ".csv,.txt,.md" } });
+    file.addEventListener("change", async () => {
+      var _a;
+      const f = (_a = file.files) == null ? void 0 : _a[0];
+      if (f) {
+        this.raw = await f.text();
+        root.querySelector(".tr-import-paste").value = this.raw;
+        this.onData();
+      }
+    });
+    const ta = root.createEl("textarea", { cls: "tr-import-paste", attr: { placeholder: "\u2026or paste the CSV here", rows: "5" } });
+    ta.addEventListener("input", () => {
+      this.raw = ta.value;
+    });
+    root.createEl("button", { cls: "tr-btn", text: "Parse" }).addEventListener("click", () => this.onData());
+    this.body = root.createDiv({ cls: "tr-import-body" });
+  }
+  repaint() {
+    var _a;
+    (_a = this.body) == null ? void 0 : _a.empty();
+    this.headers = [];
+  }
+  onData() {
+    if (!this.raw.trim()) {
+      new import_obsidian7.Notice("Paste or choose a CSV first.");
+      return;
+    }
+    if (this.source === "csv") this.renderMapping();
+    else this.renderReview();
+  }
+  // ---------------------------------------------------------- generic mapping
+  renderMapping() {
+    const b = this.body;
+    b.empty();
+    const rows = parseCsv(this.raw);
+    if (rows.length < 2) {
+      b.createDiv({ cls: "tr-muted", text: "Couldn't read any rows." });
+      return;
+    }
+    this.headers = rows[0].map((h) => h.trim());
+    b.createDiv({ cls: "tr-muted", text: "Map your bank's columns. Saved as a profile you can reuse." });
+    if (this.snapshot.importProfiles.length) {
+      new import_obsidian7.Setting(b).setName("Load a saved profile").addDropdown((d) => {
+        d.addOption("", "\u2014");
+        for (const p of this.snapshot.importProfiles) d.addOption(p.id, p.name);
+        d.onChange((id2) => {
+          var _a;
+          const p = this.snapshot.importProfiles.find((x) => x.id === id2);
+          if (p) {
+            this.map = { ...p.map };
+            this.dateFormat = p.dateFormat;
+            this.accountName = (_a = p.accountName) != null ? _a : this.accountName;
+            this.profileName = p.name;
+            this.renderMapping();
+          }
+        });
+      });
+    }
+    const colOpts = (d) => {
+      d.addOption("", "\u2014");
+      for (const h of this.headers) d.addOption(h, h);
+    };
+    new import_obsidian7.Setting(b).setName("Date column").addDropdown((d) => {
+      colOpts(d);
+      d.setValue(this.map.date).onChange((v) => this.map.date = v);
+    });
+    new import_obsidian7.Setting(b).setName("Date format").addDropdown((d) => {
+      for (const f of ["auto", "MDY", "DMY", "YMD"]) d.addOption(f, f);
+      d.setValue(this.dateFormat).onChange((v) => this.dateFormat = v);
+    });
+    new import_obsidian7.Setting(b).setName("Payee column").addDropdown((d) => {
+      var _a;
+      colOpts(d);
+      d.setValue((_a = this.map.payee) != null ? _a : "").onChange((v) => this.map.payee = v || void 0);
+    });
+    new import_obsidian7.Setting(b).setName("Memo column").addDropdown((d) => {
+      var _a;
+      colOpts(d);
+      d.setValue((_a = this.map.memo) != null ? _a : "").onChange((v) => this.map.memo = v || void 0);
+    });
+    new import_obsidian7.Setting(b).setName("Category column").addDropdown((d) => {
+      var _a;
+      colOpts(d);
+      d.setValue((_a = this.map.category) != null ? _a : "").onChange((v) => this.map.category = v || void 0);
+    });
+    new import_obsidian7.Setting(b).setName("Amount column (signed)").setDesc("Use this, or the two below for split debit/credit.").addDropdown((d) => {
+      var _a;
+      colOpts(d);
+      d.setValue((_a = this.map.amount) != null ? _a : "").onChange((v) => this.map.amount = v || void 0);
+    });
+    new import_obsidian7.Setting(b).setName("Outflow / debit column").addDropdown((d) => {
+      var _a;
+      colOpts(d);
+      d.setValue((_a = this.map.outflow) != null ? _a : "").onChange((v) => this.map.outflow = v || void 0);
+    });
+    new import_obsidian7.Setting(b).setName("Inflow / credit column").addDropdown((d) => {
+      var _a;
+      colOpts(d);
+      d.setValue((_a = this.map.inflow) != null ? _a : "").onChange((v) => this.map.inflow = v || void 0);
+    });
+    new import_obsidian7.Setting(b).setName("Account").addText((t) => t.setValue(this.accountName).onChange((v) => this.accountName = v));
+    new import_obsidian7.Setting(b).setName("Save profile as").addText((t) => t.setPlaceholder("e.g. USAA Checking").setValue(this.profileName).onChange((v) => this.profileName = v));
+    b.createEl("button", { cls: "tr-btn", text: "Preview" }).addEventListener("click", () => void this.saveProfileAndReview());
+  }
+  async saveProfileAndReview() {
+    if (!this.map.date) {
+      new import_obsidian7.Notice("Choose the date column.");
+      return;
+    }
+    if (this.profileName.trim()) {
+      const profile = { id: newId("prof"), name: this.profileName.trim(), map: this.map, dateFormat: this.dateFormat, accountName: this.accountName };
+      await saveImportProfile(this.app, profile);
+      this.snapshot = await loadSnapshot(this.app);
+    }
+    this.renderReview();
+  }
+  // ---------------------------------------------------------------- review
+  candidates() {
+    const cur = this.snapshot.baseCurrency;
+    if (this.source === "ynab-register") return { candidates: importYnabRegister(this.raw, cur) };
+    if (this.source === "ynab-budget") return { candidates: [], assignments: importYnabBudget(this.raw, cur) };
+    const profile = { id: "tmp", name: "tmp", map: this.map, dateFormat: this.dateFormat, accountName: this.accountName };
+    return { candidates: importMappedCsv(this.raw, profile, cur) };
+  }
+  renderReview() {
+    const b = this.body;
+    b.empty();
+    const { candidates, assignments } = this.candidates();
+    if (assignments && assignments.length) {
+      b.createDiv({ cls: "tr-muted", text: `${assignments.length} monthly assignment${assignments.length === 1 ? "" : "s"} found.` });
+      b.createEl("button", { cls: "tr-primary", text: `Import ${assignments.length} assignments` }).addEventListener("click", async () => {
+        await commitImport(this.app, [], assignments);
+        new import_obsidian7.Notice("Budget imported.");
+        this.onDone();
+        this.close();
+      });
+      return;
+    }
+    const nameById = new Map(this.snapshot.accounts.map((a) => [a.id, a.name]));
+    const { fresh, duplicates } = dedupe(candidates, this.snapshot.transactions, (id2) => {
+      var _a;
+      return (_a = nameById.get(id2)) != null ? _a : "";
+    });
+    if (candidates.length === 0) {
+      b.createDiv({ cls: "tr-muted", text: "No importable rows found \u2014 check the source/mapping." });
+      return;
+    }
+    b.createDiv({ cls: "tr-muted", text: `${fresh.length} new, ${duplicates.length} already in the ledger (skipped).` });
+    let includeDupes = false;
+    if (duplicates.length) {
+      new import_obsidian7.Setting(b).setName("Also import duplicates").addToggle((t) => t.setValue(false).onChange((v) => includeDupes = v));
+    }
+    const list = b.createDiv({ cls: "tr-import-list" });
+    for (const c of fresh.slice(0, 60)) this.candRow(list, c, false);
+    for (const c of duplicates.slice(0, 20)) this.candRow(list, c, true);
+    if (fresh.length > 60) list.createDiv({ cls: "tr-muted", text: `\u2026and ${fresh.length - 60} more.` });
+    b.createEl("button", { cls: "tr-primary", text: "Import" }).addEventListener("click", async () => {
+      const toCommit = includeDupes ? [...fresh, ...duplicates] : fresh;
+      if (toCommit.length === 0) {
+        new import_obsidian7.Notice("Nothing to import.");
+        return;
+      }
+      await commitImport(this.app, toCommit);
+      new import_obsidian7.Notice(`Imported ${toCommit.length} transaction${toCommit.length === 1 ? "" : "s"}.`);
+      this.onDone();
+      this.close();
+    });
+  }
+  candRow(parent, c, dup) {
+    const row = parent.createDiv({ cls: "tr-import-row" + (dup ? " is-dup" : "") });
+    const left = row.createDiv();
+    left.createDiv({ cls: "tr-import-payee", text: c.payee || c.transferAccountName || c.categoryName || "\u2014" });
+    left.createDiv({ cls: "tr-import-sub", text: `${c.date} \xB7 ${c.accountName}${c.categoryName ? " \xB7 " + c.categoryName : ""}${dup ? " \xB7 duplicate" : ""}` });
+    row.createDiv({ cls: "tr-import-amt " + (c.amount < 0 ? "is-neg" : "is-pos"), text: formatMoney(c.amount, this.snapshot.baseCurrency, { signed: true }) });
+  }
+};
+
 // src/conflicts.ts
-var import_obsidian6 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 var ROOT3 = "Finances";
 function baseOf(path) {
   const m = path.match(/^(.*)\.sync-conflict-[^/]*(\.md)$/);
@@ -1125,9 +1723,9 @@ async function resolveConflicts(app) {
       report.configConflicts.push(file.path);
       continue;
     }
-    const baseAbstract = app.vault.getAbstractFileByPath((0, import_obsidian6.normalizePath)(basePath));
-    if (!(baseAbstract instanceof import_obsidian6.TFile)) {
-      await app.vault.rename(file, (0, import_obsidian6.normalizePath)(basePath)).catch(() => {
+    const baseAbstract = app.vault.getAbstractFileByPath((0, import_obsidian8.normalizePath)(basePath));
+    if (!(baseAbstract instanceof import_obsidian8.TFile)) {
+      await app.vault.rename(file, (0, import_obsidian8.normalizePath)(basePath)).catch(() => {
       });
       report.resolved++;
       continue;
@@ -1149,7 +1747,7 @@ async function resolveConflicts(app) {
 
 // src/view.ts
 var VIEW_TYPE_TREASURY = "treasury-view";
-var TreasuryView = class extends import_obsidian7.ItemView {
+var TreasuryView = class extends import_obsidian9.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -1210,7 +1808,7 @@ var TreasuryView = class extends import_obsidian7.ItemView {
       const r = await resolveConflicts(this.app);
       const extra = r.unresolved.length ? ` ${r.unresolved.reduce((n, u) => n + u.ids.length, 0)} record(s) need review.` : "";
       const cfg = r.configConflicts.length ? ` ${r.configConflicts.length} file(s) left for manual review.` : "";
-      new import_obsidian7.Notice(`Merged ${r.resolved} conflict file(s).${extra}${cfg}`);
+      new import_obsidian9.Notice(`Merged ${r.resolved} conflict file(s).${extra}${cfg}`);
       await this.render();
     });
   }
@@ -1224,7 +1822,7 @@ var TreasuryView = class extends import_obsidian7.ItemView {
     wrap.createDiv({ cls: "tr-muted", text: "Every dollar gets a job. Start with a small scaffold you can shape \u2014 accounts, categories, and transactions are all editable." });
     wrap.createEl("button", { cls: "tr-primary", text: "Create a starter budget" }).addEventListener("click", async () => {
       await saveSnapshot(this.app, starterBudget());
-      new import_obsidian7.Notice("Treasury initialised.");
+      new import_obsidian9.Notice("Treasury initialised.");
       await this.render();
     });
   }
@@ -1322,9 +1920,14 @@ var TreasuryView = class extends import_obsidian7.ItemView {
         if (clr !== bal) right.createSpan({ cls: "tr-muted", text: `${formatMoney(clr, a.currency)} cleared` });
       }
     }
-    root.createEl("button", { cls: "tr-add-row", text: "\uFF0B Account" }).addEventListener(
+    const actions = root.createDiv({ cls: "tr-acct-actions" });
+    actions.createEl("button", { cls: "tr-add-row", text: "\uFF0B Account" }).addEventListener(
       "click",
       () => new AddAccountModal(this.app, s.baseCurrency, () => void this.render()).open()
+    );
+    actions.createEl("button", { cls: "tr-add-row", text: "\u21E9 Import" }).addEventListener(
+      "click",
+      () => new ImportModal(this.app, () => void this.render()).open()
     );
   }
   go(delta) {
@@ -1338,7 +1941,7 @@ function monthLabel(month) {
 }
 
 // src/main.ts
-var TreasuryPlugin = class extends import_obsidian8.Plugin {
+var TreasuryPlugin = class extends import_obsidian10.Plugin {
   async onload() {
     this.registerView(VIEW_TYPE_TREASURY, (leaf) => new TreasuryView(leaf, this));
     applyUiStyles(this);
@@ -1354,15 +1957,20 @@ var TreasuryPlugin = class extends import_obsidian8.Plugin {
       callback: () => new TransactionModal(this.app, () => this.refreshViews()).open()
     });
     this.addCommand({
+      id: "import-transactions",
+      name: "Import transactions",
+      callback: () => new ImportModal(this.app, () => this.refreshViews()).open()
+    });
+    this.addCommand({
       id: "resolve-conflicts",
       name: "Resolve sync conflicts",
       callback: async () => {
         if (!hasConflicts(this.app)) {
-          new import_obsidian8.Notice("No sync conflicts.");
+          new import_obsidian10.Notice("No sync conflicts.");
           return;
         }
         const r = await resolveConflicts(this.app);
-        new import_obsidian8.Notice(`Merged ${r.resolved} conflict file(s).`);
+        new import_obsidian10.Notice(`Merged ${r.resolved} conflict file(s).`);
         this.refreshViews();
       }
     });
