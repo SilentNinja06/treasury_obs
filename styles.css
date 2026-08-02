@@ -121,3 +121,8 @@
 .tr-target-fill { height: 100%; background: var(--interactive-accent); border-radius: 3px; min-width: 1px; }
 .tr-target-fill.is-funded { background: var(--color-green, #3a7a3a); }
 .tr-target-note { font-size: 0.68rem; color: var(--text-muted); white-space: nowrap; }
+/* sync / offline status strip */
+.tr-status { margin: 2px 0 6px; }
+.tr-status.is-offline { color: var(--text-warning, #b9830a); }
+.tr-status.is-offline .mrd-status-value { color: var(--text-warning, #b9830a); font-weight: 600; }
+.tr-status.has-conflicts .mrd-status-value { color: var(--text-error); }

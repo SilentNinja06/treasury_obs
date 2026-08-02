@@ -85,6 +85,31 @@ var BottomSheetModal = class extends import_obsidian.Modal {
   }
 };
 
+// ../../packages/ui/dist/statusStrip.js
+function createStatusStrip(parent, initial = {}) {
+  const el = parent.createDiv({ cls: cls("status-strip") });
+  el.setAttribute("role", "status");
+  const render = (s) => {
+    var _a;
+    el.empty();
+    const cell = (label, value) => {
+      const c = el.createDiv({ cls: cls("status", "cell") });
+      c.createSpan({ cls: cls("status", "label"), text: label });
+      c.createSpan({ cls: cls("status", "value"), text: value });
+    };
+    if (typeof s.count === "number")
+      cell("REC", String(s.count));
+    if (s.filter)
+      cell("FILTER", s.filter);
+    if (s.updated)
+      cell("UPDATED", s.updated);
+    for (const e of (_a = s.extra) !== null && _a !== void 0 ? _a : [])
+      cell(e.label, e.value);
+  };
+  render(initial);
+  return { el, update: render };
+}
+
 // ../../packages/ui/dist/toast.js
 var import_obsidian2 = require("obsidian");
 
@@ -3297,6 +3322,32 @@ async function resolveConflicts(app) {
   return report;
 }
 
+// src/status.ts
+function newestFinanceWrite(app) {
+  let newest = 0;
+  for (const f of app.vault.getFiles()) {
+    if (f.extension !== "md") continue;
+    if (!f.path.startsWith("Finances/")) continue;
+    if (f.stat.mtime > newest) newest = f.stat.mtime;
+  }
+  return newest;
+}
+function relativeTime(ms, now = Date.now()) {
+  if (!ms) return "\u2014";
+  const s = Math.max(0, Math.round((now - ms) / 1e3));
+  if (s < 45) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 7) return `${d}d ago`;
+  return new Date(ms).toLocaleDateString(void 0, { month: "short", day: "numeric" });
+}
+function isOnline() {
+  return typeof navigator === "undefined" ? true : navigator.onLine !== false;
+}
+
 // src/view.ts
 var VIEW_TYPE_TREASURY = "treasury-view";
 var TreasuryView = class extends import_obsidian14.ItemView {
@@ -3317,6 +3368,8 @@ var TreasuryView = class extends import_obsidian14.ItemView {
     return "wallet";
   }
   async onOpen() {
+    this.registerDomEvent(window, "online", () => void this.render());
+    this.registerDomEvent(window, "offline", () => void this.render());
     await this.render();
   }
   async refresh() {
@@ -3334,6 +3387,7 @@ var TreasuryView = class extends import_obsidian14.ItemView {
     }
     this.renderConflictBanner(root);
     this.renderTopbar(root);
+    this.renderStatusStrip(root, s);
     if (this.tab === "budget") this.renderBudget(root, s);
     else if (this.tab === "accounts") this.renderAccounts(root, s);
     else this.renderUpcoming(root, s);
@@ -3351,6 +3405,24 @@ var TreasuryView = class extends import_obsidian14.ItemView {
         void this.render();
       });
     }
+  }
+  /** The hairline sync/offline strip (§2, §5, §7): connectivity, when the ledger
+   * last hit disk (what Obsidian Sync propagates), record count, and conflicts. */
+  renderStatusStrip(root, s) {
+    const online = isOnline();
+    const conflicts = findConflicts(this.app).length;
+    const written = newestFinanceWrite(this.app);
+    const { el } = createStatusStrip(root, {
+      count: s.transactions.length,
+      updated: relativeTime(written),
+      extra: [
+        { label: "SYNC", value: online ? "online" : "offline" },
+        ...conflicts ? [{ label: "CONFLICTS", value: String(conflicts) }] : []
+      ]
+    });
+    el.addClass("tr-status");
+    if (!online) el.addClass("is-offline");
+    if (conflicts) el.addClass("has-conflicts");
   }
   renderConflictBanner(root) {
     if (!hasConflicts(this.app)) return;
