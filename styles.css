@@ -1,0 +1,31 @@
+/* MERIDIAN Treasury styles — appended to the shared UI system. */
+.tr-root { padding: 8px 12px 40px; }
+.tr-empty { max-width: 480px; margin: 10vh auto; text-align: center; display: flex; flex-direction: column; gap: 12px; }
+.tr-empty h2 { font-family: var(--dash-font-mono, monospace); letter-spacing: 0.12em; margin: 0; }
+.tr-muted { color: var(--text-muted); font-size: 0.86rem; }
+.tr-primary { min-height: 44px; padding: 0 16px; border: none; border-radius: 6px; background: var(--interactive-accent); color: var(--text-on-accent); cursor: pointer; font-family: var(--font-monospace); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; align-self: center; }
+.tr-topbar { display: flex; align-items: center; justify-content: space-between; padding: 4px 0 10px; }
+.tr-title { font-family: var(--dash-font-mono, monospace); letter-spacing: 0.14em; font-size: 0.8rem; color: var(--text-muted); }
+.tr-monthnav { display: flex; align-items: center; gap: 8px; }
+.tr-navbtn { min-width: 34px; height: 34px; border: 1px solid var(--background-modifier-border); border-radius: 6px; background: transparent; color: var(--text-normal); cursor: pointer; font-size: 1rem; }
+.tr-navbtn:hover { background: var(--background-modifier-hover); }
+.tr-month { min-width: 128px; text-align: center; font-weight: 600; }
+.tr-rta { display: flex; align-items: baseline; justify-content: space-between; padding: 12px 14px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--background-modifier-border); }
+.tr-rta.is-ok { background: color-mix(in srgb, var(--interactive-accent) 12%, transparent); }
+.tr-rta.is-warn { background: color-mix(in srgb, var(--color-green, #3a3) 14%, transparent); }
+.tr-rta.is-bad { background: color-mix(in srgb, var(--text-error) 16%, transparent); border-color: var(--text-error); }
+.tr-rta-label { font-family: var(--dash-font-mono, monospace); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+.tr-rta-value { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tr-rta.is-bad .tr-rta-value { color: var(--text-error); }
+.tr-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; align-items: center; gap: 6px; padding: 7px 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.tr-row-head { border-bottom: 2px solid var(--background-modifier-border); }
+.tr-row-head span { font-family: var(--dash-font-mono, monospace); font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.tr-c-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-c-num { text-align: right; font-variant-numeric: tabular-nums; font-size: 0.9rem; }
+.tr-activity { color: var(--text-muted); }
+.tr-avail.is-pos { color: var(--color-green, #3a7a3a); }
+.tr-avail.is-neg { color: var(--text-error); font-weight: 600; }
+.tr-group { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; padding: 6px 8px 4px; border-bottom: 1px solid var(--background-modifier-border); }
+.tr-group-name { font-family: var(--dash-font-mono, monospace); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-normal); }
+.tr-group-total { font-variant-numeric: tabular-nums; font-size: 0.82rem; color: var(--text-muted); }
+.tr-foot { margin-top: 16px; font-style: italic; }
