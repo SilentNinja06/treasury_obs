@@ -27,7 +27,7 @@ __export(main_exports, {
   default: () => TreasuryPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian13 = require("obsidian");
+var import_obsidian14 = require("obsidian");
 
 // ../../packages/ui/dist/constants.js
 var CLS = "mrd";
@@ -111,7 +111,7 @@ function scopeEl(el, opts = {}) {
 }
 
 // src/view.ts
-var import_obsidian12 = require("obsidian");
+var import_obsidian13 = require("obsidian");
 
 // ../../packages/ledger/dist/money.js
 var CURRENCIES = {
@@ -923,6 +923,80 @@ function compareStrategies(debts, extraPerMonth) {
     avalanche: planDebts(debts, extraPerMonth, "avalanche"),
     snowball: planDebts(debts, extraPerMonth, "snowball")
   };
+}
+
+// ../../packages/ledger/dist/reports.js
+function endOfMonth(month) {
+  const [y, m] = month.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return `${month}-${String(last).padStart(2, "0")}`;
+}
+function spendingByCategory(snapshot, from, to) {
+  var _a, _b;
+  const cats = new Map(snapshot.categories.map((c) => [c.id, c]));
+  const groups = new Map(snapshot.groups.map((g) => [g.id, g.name]));
+  const net = /* @__PURE__ */ new Map();
+  for (const t of snapshot.transactions) {
+    if (t.date < from || t.date > to)
+      continue;
+    for (const p of t.postings) {
+      if (!p.categoryId)
+        continue;
+      const c = cats.get(p.categoryId);
+      if (!c || c.kind !== "spending")
+        continue;
+      net.set(p.categoryId, ((_a = net.get(p.categoryId)) !== null && _a !== void 0 ? _a : 0) + p.amount);
+    }
+  }
+  const out = [];
+  for (const [id2, amount] of net) {
+    if (amount >= 0)
+      continue;
+    const c = cats.get(id2);
+    out.push({ categoryId: id2, name: c.name, groupName: (_b = groups.get(c.groupId)) !== null && _b !== void 0 ? _b : "", total: -amount });
+  }
+  return out.sort((a, b) => b.total - a.total);
+}
+function incomeVsExpense(snapshot, fromMonth, toMonth) {
+  var _a, _b;
+  const cats = new Map(snapshot.categories.map((c) => [c.id, c]));
+  const income = /* @__PURE__ */ new Map();
+  const expense = /* @__PURE__ */ new Map();
+  for (const t of snapshot.transactions) {
+    const month = monthOf(t.date);
+    if (month < fromMonth || month > toMonth)
+      continue;
+    for (const p of t.postings) {
+      if (!p.categoryId)
+        continue;
+      const c = cats.get(p.categoryId);
+      if (!c)
+        continue;
+      if (c.kind === "income")
+        income.set(month, ((_a = income.get(month)) !== null && _a !== void 0 ? _a : 0) + p.amount);
+      else if (c.kind === "spending")
+        expense.set(month, ((_b = expense.get(month)) !== null && _b !== void 0 ? _b : 0) + p.amount);
+    }
+  }
+  return monthRange(fromMonth, toMonth).map((month) => {
+    var _a2, _b2;
+    const inc = (_a2 = income.get(month)) !== null && _a2 !== void 0 ? _a2 : 0;
+    const exp = -((_b2 = expense.get(month)) !== null && _b2 !== void 0 ? _b2 : 0);
+    return { month, income: inc, expense: exp, net: inc - exp };
+  });
+}
+function netWorthTrend(snapshot, fromMonth, toMonth) {
+  return monthRange(fromMonth, toMonth).map((month) => ({ month, netWorth: netWorth(snapshot, endOfMonth(month)) }));
+}
+function csvCell(v) {
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function reportToCsv(headers, rows) {
+  const lines = [headers.map(csvCell).join(",")];
+  for (const r of rows)
+    lines.push(r.map(csvCell).join(","));
+  return lines.join("\n") + "\n";
 }
 
 // ../../packages/ledger/dist/format/json.js
@@ -2714,8 +2788,178 @@ var ForecastModal = class extends BottomSheetModal {
   }
 };
 
-// src/conflicts.ts
+// src/reports-modal.ts
 var import_obsidian11 = require("obsidian");
+var KINDS = [
+  ["spending", "Spending"],
+  ["flow", "Income vs Expense"],
+  ["networth", "Net worth"]
+];
+var ReportsModal = class extends BottomSheetModal {
+  constructor(app, onDone) {
+    super(app);
+    this.onDone = onDone;
+    this.kind = "spending";
+    this.toMonth = monthOf(todayISO());
+    this.fromMonth = addMonths(this.toMonth, -2);
+  }
+  renderBody(root) {
+    scopeEl(root);
+    root.addClass("tr-reports");
+    this.titleEl.setText("Reports");
+    this.body = root.createDiv();
+    void this.refresh();
+  }
+  async refresh() {
+    this.snapshot = await loadSnapshot(this.app);
+    this.paint();
+    this.onDone();
+  }
+  paint() {
+    const c = this.body;
+    c.empty();
+    const seg = c.createDiv({ cls: "tr-seg" });
+    for (const [k, label] of KINDS) {
+      const b = seg.createEl("button", { cls: "tr-seg-btn" + (this.kind === k ? " is-on" : ""), text: label });
+      b.addEventListener("click", () => {
+        this.kind = k;
+        this.paint();
+      });
+    }
+    const range = c.createDiv({ cls: "tr-report-range" });
+    new import_obsidian11.Setting(range).setName("From").addText((t) => {
+      t.inputEl.type = "month";
+      t.setValue(this.fromMonth).onChange((v) => {
+        if (v) {
+          this.fromMonth = v;
+          this.paint();
+        }
+      });
+    });
+    new import_obsidian11.Setting(range).setName("To").addText((t) => {
+      t.inputEl.type = "month";
+      t.setValue(this.toMonth).onChange((v) => {
+        if (v) {
+          this.toMonth = v;
+          this.paint();
+        }
+      });
+    });
+    if (this.fromMonth > this.toMonth) {
+      c.createDiv({ cls: "tr-muted", text: "From is after To \u2014 adjust the range." });
+      return;
+    }
+    const out = c.createDiv({ cls: "tr-report-out" });
+    if (this.kind === "spending") this.renderSpending(out);
+    else if (this.kind === "flow") this.renderFlow(out);
+    else this.renderNetWorth(out);
+    c.createEl("button", { cls: "tr-add-row", text: "\u2B07 Export CSV" }).addEventListener("click", () => void this.exportCsv());
+  }
+  cur() {
+    return this.snapshot.baseCurrency;
+  }
+  bars(parent, rows) {
+    const max = Math.max(1, ...rows.map((r) => Math.abs(r.value)));
+    for (const r of rows) {
+      const row = parent.createDiv({ cls: "tr-bar-row" });
+      row.createDiv({ cls: "tr-bar-label", text: r.label });
+      const track = row.createDiv({ cls: "tr-bar-track" });
+      const fill = track.createDiv({ cls: "tr-bar-fill" + (r.value < 0 ? " is-neg" : "") });
+      fill.style.width = `${Math.abs(r.value) / max * 100}%`;
+      row.createDiv({ cls: "tr-bar-val", text: formatMoney(r.value, this.cur(), { signed: !!r.signed }) });
+    }
+  }
+  renderSpending(out) {
+    const rows = spendingByCategory(this.snapshot, this.fromMonth + "-01", endOfMonth(this.toMonth));
+    if (rows.length === 0) {
+      out.createDiv({ cls: "tr-muted", text: "No spending in this range." });
+      return;
+    }
+    const total = rows.reduce((s, r) => s + r.total, 0);
+    const head = out.createDiv({ cls: "tr-rta is-ok" });
+    head.createSpan({ cls: "tr-rta-label", text: "Total spent" });
+    head.createSpan({ cls: "tr-rta-value", text: formatMoney(total, this.cur()) });
+    this.bars(out, rows.map((r) => ({ label: r.name, value: r.total })));
+  }
+  renderFlow(out) {
+    const rows = incomeVsExpense(this.snapshot, this.fromMonth, this.toMonth);
+    const totalNet = rows.reduce((s, r) => s + r.net, 0);
+    const head = out.createDiv({ cls: "tr-rta " + (totalNet < 0 ? "is-bad" : "is-ok") });
+    head.createSpan({ cls: "tr-rta-label", text: "Net over range" });
+    head.createSpan({ cls: "tr-rta-value", text: formatMoney(totalNet, this.cur(), { signed: true }) });
+    for (const r of rows) {
+      const block = out.createDiv({ cls: "tr-flow-month" });
+      block.createDiv({ cls: "tr-group" }).createSpan({ cls: "tr-group-name", text: monthLabel(r.month) });
+      this.bars(block, [
+        { label: "Income", value: r.income },
+        { label: "Expense", value: -r.expense },
+        { label: "Net", value: r.net, signed: true }
+      ]);
+    }
+  }
+  renderNetWorth(out) {
+    var _a, _b, _c, _d;
+    const rows = netWorthTrend(this.snapshot, this.fromMonth, this.toMonth);
+    const latest = (_b = (_a = rows[rows.length - 1]) == null ? void 0 : _a.netWorth) != null ? _b : 0;
+    const first = (_d = (_c = rows[0]) == null ? void 0 : _c.netWorth) != null ? _d : 0;
+    const head = out.createDiv({ cls: "tr-rta " + (latest < 0 ? "is-bad" : "is-ok") });
+    head.createSpan({ cls: "tr-rta-label", text: "Net worth now" });
+    head.createSpan({ cls: "tr-rta-value", text: formatMoney(latest, this.cur()) });
+    const change = latest - first;
+    out.createDiv({ cls: change < 0 ? "tr-avail is-neg" : "tr-muted", text: `Change over range: ${formatMoney(change, this.cur(), { signed: true })}` });
+    this.bars(out, rows.map((r) => ({ label: monthLabel(r.month), value: r.netWorth, signed: true })));
+  }
+  // --------------------------------------------------------------- export
+  buildCsv() {
+    const cur = this.cur();
+    const money = (m) => toDecimalString(m, cur);
+    if (this.kind === "spending") {
+      const rows2 = spendingByCategory(this.snapshot, this.fromMonth + "-01", endOfMonth(this.toMonth));
+      return {
+        name: `spending_${this.fromMonth}_${this.toMonth}`,
+        text: reportToCsv(["Group", "Category", "Spent"], rows2.map((r) => [r.groupName, r.name, money(r.total)]))
+      };
+    }
+    if (this.kind === "flow") {
+      const rows2 = incomeVsExpense(this.snapshot, this.fromMonth, this.toMonth);
+      return {
+        name: `income_expense_${this.fromMonth}_${this.toMonth}`,
+        text: reportToCsv(["Month", "Income", "Expense", "Net"], rows2.map((r) => [r.month, money(r.income), money(r.expense), money(r.net)]))
+      };
+    }
+    const rows = netWorthTrend(this.snapshot, this.fromMonth, this.toMonth);
+    return {
+      name: `net_worth_${this.fromMonth}_${this.toMonth}`,
+      text: reportToCsv(["Month", "Net worth"], rows.map((r) => [r.month, money(r.netWorth)]))
+    };
+  }
+  async exportCsv() {
+    const { name, text } = this.buildCsv();
+    const dir = "Finances/Reports";
+    if (!this.app.vault.getAbstractFileByPath(dir)) {
+      try {
+        await this.app.vault.createFolder(dir);
+      } catch (e) {
+      }
+    }
+    const path = (0, import_obsidian11.normalizePath)(`${dir}/${name}.csv`);
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    try {
+      if (existing && "path" in existing) await this.app.vault.adapter.write(path, text);
+      else await this.app.vault.create(path, text);
+      new import_obsidian11.Notice(`Exported ${path}`);
+    } catch (e) {
+      new import_obsidian11.Notice(`Export failed: ${e.message}`);
+    }
+  }
+};
+function monthLabel(month) {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleString(void 0, { month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+// src/conflicts.ts
+var import_obsidian12 = require("obsidian");
 var ROOT3 = "Finances";
 function baseOf(path) {
   const m = path.match(/^(.*)\.sync-conflict-[^/]*(\.md)$/);
@@ -2736,9 +2980,9 @@ async function resolveConflicts(app) {
       report.configConflicts.push(file.path);
       continue;
     }
-    const baseAbstract = app.vault.getAbstractFileByPath((0, import_obsidian11.normalizePath)(basePath));
-    if (!(baseAbstract instanceof import_obsidian11.TFile)) {
-      await app.vault.rename(file, (0, import_obsidian11.normalizePath)(basePath)).catch(() => {
+    const baseAbstract = app.vault.getAbstractFileByPath((0, import_obsidian12.normalizePath)(basePath));
+    if (!(baseAbstract instanceof import_obsidian12.TFile)) {
+      await app.vault.rename(file, (0, import_obsidian12.normalizePath)(basePath)).catch(() => {
       });
       report.resolved++;
       continue;
@@ -2760,7 +3004,7 @@ async function resolveConflicts(app) {
 
 // src/view.ts
 var VIEW_TYPE_TREASURY = "treasury-view";
-var TreasuryView = class extends import_obsidian12.ItemView {
+var TreasuryView = class extends import_obsidian13.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -2822,7 +3066,7 @@ var TreasuryView = class extends import_obsidian12.ItemView {
       const r = await resolveConflicts(this.app);
       const extra = r.unresolved.length ? ` ${r.unresolved.reduce((n, u) => n + u.ids.length, 0)} record(s) need review.` : "";
       const cfg = r.configConflicts.length ? ` ${r.configConflicts.length} file(s) left for manual review.` : "";
-      new import_obsidian12.Notice(`Merged ${r.resolved} conflict file(s).${extra}${cfg}`);
+      new import_obsidian13.Notice(`Merged ${r.resolved} conflict file(s).${extra}${cfg}`);
       await this.render();
     });
   }
@@ -2836,7 +3080,7 @@ var TreasuryView = class extends import_obsidian12.ItemView {
     wrap.createDiv({ cls: "tr-muted", text: "Every dollar gets a job. Start with a small scaffold you can shape \u2014 accounts, categories, and transactions are all editable." });
     wrap.createEl("button", { cls: "tr-primary", text: "Create a starter budget" }).addEventListener("click", async () => {
       await saveSnapshot(this.app, starterBudget());
-      new import_obsidian12.Notice("Treasury initialised.");
+      new import_obsidian13.Notice("Treasury initialised.");
       await this.render();
     });
   }
@@ -2847,7 +3091,7 @@ var TreasuryView = class extends import_obsidian12.ItemView {
     const view = result.months[this.month];
     const nav = root.createDiv({ cls: "tr-monthnav" });
     nav.createEl("button", { cls: "tr-navbtn", text: "\u2039" }).addEventListener("click", () => this.go(-1));
-    nav.createSpan({ cls: "tr-month", text: monthLabel(this.month) });
+    nav.createSpan({ cls: "tr-month", text: monthLabel2(this.month) });
     nav.createEl("button", { cls: "tr-navbtn", text: "\u203A" }).addEventListener("click", () => this.go(1));
     const rta = result.readyToAssign;
     const banner = root.createDiv({ cls: "tr-rta " + (rta < 0 ? "is-bad" : rta > 0 ? "is-warn" : "is-ok") });
@@ -2956,6 +3200,10 @@ var TreasuryView = class extends import_obsidian12.ItemView {
       "click",
       () => new InvestmentsModal(this.app, () => void this.render()).open()
     );
+    plan.createEl("button", { cls: "tr-add-row", text: "\u{1F4D1} Reports" }).addEventListener(
+      "click",
+      () => new ReportsModal(this.app, () => void this.render()).open()
+    );
   }
   // ------------------------------------------------------------ upcoming tab
   renderUpcoming(root, s) {
@@ -2989,13 +3237,13 @@ var TreasuryView = class extends import_obsidian12.ItemView {
     void this.render();
   }
 };
-function monthLabel(month) {
+function monthLabel2(month) {
   const [y, m] = month.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, 1)).toLocaleString(void 0, { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
 // src/main.ts
-var TreasuryPlugin = class extends import_obsidian13.Plugin {
+var TreasuryPlugin = class extends import_obsidian14.Plugin {
   async onload() {
     this.registerView(VIEW_TYPE_TREASURY, (leaf) => new TreasuryView(leaf, this));
     applyUiStyles(this);
@@ -3020,11 +3268,11 @@ var TreasuryPlugin = class extends import_obsidian13.Plugin {
       name: "Resolve sync conflicts",
       callback: async () => {
         if (!hasConflicts(this.app)) {
-          new import_obsidian13.Notice("No sync conflicts.");
+          new import_obsidian14.Notice("No sync conflicts.");
           return;
         }
         const r = await resolveConflicts(this.app);
-        new import_obsidian13.Notice(`Merged ${r.resolved} conflict file(s).`);
+        new import_obsidian14.Notice(`Merged ${r.resolved} conflict file(s).`);
         this.refreshViews();
       }
     });
@@ -3053,11 +3301,16 @@ var TreasuryPlugin = class extends import_obsidian13.Plugin {
       name: "Investments & holdings",
       callback: () => new InvestmentsModal(this.app, () => this.refreshViews()).open()
     });
+    this.addCommand({
+      id: "reports",
+      name: "Reports",
+      callback: () => new ReportsModal(this.app, () => this.refreshViews()).open()
+    });
     this.registerObsidianProtocolHandler("treasury", () => new TransactionModal(this.app, () => this.refreshViews()).open());
     this.app.workspace.onLayoutReady(() => {
       void processAutoEnter(this.app).then((n) => {
         if (n > 0) {
-          new import_obsidian13.Notice(`Treasury: entered ${n} scheduled transaction${n === 1 ? "" : "s"}.`);
+          new import_obsidian14.Notice(`Treasury: entered ${n} scheduled transaction${n === 1 ? "" : "s"}.`);
           this.refreshViews();
         }
       });
