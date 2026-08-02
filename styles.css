@@ -95,3 +95,12 @@
 .tr-rule-actions { display: flex; gap: 4px; flex: none; }
 .tr-rule-actions .tr-btn, .tr-rule-actions .tr-primary { min-height: 30px; padding: 0 10px; }
 .tr-sched-row.is-overdue { background: color-mix(in srgb, var(--text-error) 8%, transparent); }
+.tr-acct-actions + .tr-acct-actions { margin-top: 8px; }
+/* planning: forecast / debt / investments */
+.tr-plan-result { margin: 12px 0; padding: 10px 8px; border-radius: 8px; background: var(--background-secondary); }
+.tr-plan-headline { font-size: 1.05rem; font-weight: 600; }
+.tr-plan-result .is-neg { color: var(--text-error); }
+.tr-spark { display: block; width: 100%; height: 60px; margin: 10px 0; }
+.tr-spark-line { stroke: var(--interactive-accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.tr-spark-line.is-neg { stroke: var(--text-error); }
+.tr-spark-zero { stroke: var(--background-modifier-border); stroke-width: 1; vector-effect: non-scaling-stroke; }

@@ -27,7 +27,7 @@ __export(main_exports, {
   default: () => TreasuryPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian12 = require("obsidian");
+var import_obsidian13 = require("obsidian");
 
 // ../../packages/ui/dist/constants.js
 var CLS = "mrd";
@@ -111,7 +111,7 @@ function scopeEl(el, opts = {}) {
 }
 
 // src/view.ts
-var import_obsidian11 = require("obsidian");
+var import_obsidian12 = require("obsidian");
 
 // ../../packages/ledger/dist/money.js
 var CURRENCIES = {
@@ -751,6 +751,179 @@ function upcoming(list, asOf, horizonDays = 45) {
   }
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
+function occurrences(sched, from, to) {
+  const out = [];
+  let d = sched.nextDate;
+  let guard = 0;
+  while (d && d <= to && !isEnded(sched, d) && guard++ < 2e3) {
+    if (d >= from)
+      out.push(d);
+    d = advance(d, sched.recurrence.freq, sched.recurrence.interval);
+  }
+  return out;
+}
+
+// ../../packages/ledger/dist/forecast.js
+function cashDelta(template, isCash) {
+  let d = 0;
+  const primaryIsCash = isCash(template.accountId);
+  for (const p of template.postings) {
+    if (primaryIsCash)
+      d += p.amount;
+    if (p.transferAccountId && isCash(p.transferAccountId))
+      d += -p.amount;
+  }
+  return d;
+}
+function projectCashFlow(snapshot, horizonDays = 90, asOf = todayISO()) {
+  var _a;
+  const horizon = addDaysISO(asOf, horizonDays);
+  const cashIds = new Set(snapshot.accounts.filter((a) => a.role === "cash" && !a.closed).map((a) => a.id));
+  const isCash = (id2) => cashIds.has(id2);
+  let start = 0;
+  for (const id2 of cashIds)
+    start += accountBalance(snapshot, id2, asOf);
+  const from = addDaysISO(asOf, 1);
+  const byDate = /* @__PURE__ */ new Map();
+  for (const sched of snapshot.scheduled) {
+    const delta = cashDelta(sched.template, isCash);
+    if (delta === 0)
+      continue;
+    for (const date of occurrences(sched, from, horizon)) {
+      const slot = (_a = byDate.get(date)) !== null && _a !== void 0 ? _a : { delta: 0, labels: [] };
+      slot.delta += delta;
+      const label = sched.template.payee || "(scheduled)";
+      if (!slot.labels.includes(label))
+        slot.labels.push(label);
+      byDate.set(date, slot);
+    }
+  }
+  const dates = [...byDate.keys()].sort();
+  const points = [];
+  let running = start;
+  let low = start;
+  let lowDate = asOf;
+  let firstNegative = start < 0 ? asOf : null;
+  for (const date of dates) {
+    const slot = byDate.get(date);
+    running += slot.delta;
+    points.push({ date, balance: running, delta: slot.delta, labels: slot.labels });
+    if (running < low) {
+      low = running;
+      lowDate = date;
+    }
+    if (firstNegative === null && running < 0)
+      firstNegative = date;
+  }
+  return { asOf, horizon, start, points, low, lowDate, firstNegative, end: running };
+}
+
+// ../../packages/ledger/dist/debt.js
+var MAX_MONTHS = 600;
+function priorityOrder(debts, strategy) {
+  const sorted = [...debts].sort((a, b) => {
+    if (strategy === "avalanche" && a.apr !== b.apr)
+      return b.apr - a.apr;
+    if (strategy === "snowball" && a.balance !== b.balance)
+      return a.balance - b.balance;
+    if (a.balance !== b.balance)
+      return a.balance - b.balance;
+    return a.id.localeCompare(b.id);
+  });
+  return sorted.map((d) => d.id);
+}
+function planDebts(debts, extraPerMonth, strategy) {
+  var _a, _b;
+  const order = priorityOrder(debts, strategy);
+  const bal = new Map(debts.map((d) => [d.id, Math.max(0, d.balance)]));
+  const spec2 = new Map(debts.map((d) => [d.id, d]));
+  const payoff = {};
+  for (const d of debts)
+    payoff[d.id] = { monthsToPayoff: 0, interestPaid: 0, totalPaid: 0 };
+  const pool = debts.reduce((s, d) => s + Math.max(0, d.minimum), 0) + Math.max(0, extraPerMonth);
+  const timeline = [];
+  let totalInterest = 0;
+  let totalPaid = 0;
+  let month = 0;
+  let neverPayoff = false;
+  const active = () => order.filter((id2) => {
+    var _a2;
+    return ((_a2 = bal.get(id2)) !== null && _a2 !== void 0 ? _a2 : 0) > 0;
+  });
+  while (active().length > 0) {
+    month++;
+    if (month > MAX_MONTHS) {
+      neverPayoff = true;
+      month--;
+      break;
+    }
+    let monthInterest = 0;
+    let monthPaid = 0;
+    for (const id2 of active()) {
+      const d = spec2.get(id2);
+      const b = bal.get(id2);
+      const interest = Math.round(b * d.apr / 12);
+      bal.set(id2, b + interest);
+      monthInterest += interest;
+      payoff[id2].interestPaid += interest;
+    }
+    let budget = pool;
+    for (const id2 of active()) {
+      const d = spec2.get(id2);
+      const b = bal.get(id2);
+      const pay = Math.min(Math.max(0, d.minimum), b, budget);
+      bal.set(id2, b - pay);
+      budget -= pay;
+      monthPaid += pay;
+      payoff[id2].totalPaid += pay;
+    }
+    for (const id2 of order) {
+      if (budget <= 0)
+        break;
+      const b = (_a = bal.get(id2)) !== null && _a !== void 0 ? _a : 0;
+      if (b <= 0)
+        continue;
+      const pay = Math.min(b, budget);
+      bal.set(id2, b - pay);
+      budget -= pay;
+      monthPaid += pay;
+      payoff[id2].totalPaid += pay;
+    }
+    if (monthPaid === 0) {
+      neverPayoff = true;
+      month--;
+      break;
+    }
+    for (const id2 of order) {
+      if (((_b = bal.get(id2)) !== null && _b !== void 0 ? _b : 0) <= 0 && payoff[id2].monthsToPayoff === 0 && spec2.get(id2).balance > 0) {
+        payoff[id2].monthsToPayoff = month;
+      }
+    }
+    totalInterest += monthInterest;
+    totalPaid += monthPaid;
+    let totalBalance = 0;
+    for (const v of bal.values())
+      totalBalance += v;
+    timeline.push({ month, interest: monthInterest, paid: monthPaid, balance: totalBalance });
+  }
+  return {
+    strategy,
+    extraPerMonth,
+    months: neverPayoff ? Infinity : month,
+    totalInterest,
+    totalPaid,
+    neverPayoff,
+    order,
+    payoff,
+    timeline
+  };
+}
+function compareStrategies(debts, extraPerMonth) {
+  return {
+    avalanche: planDebts(debts, extraPerMonth, "avalanche"),
+    snowball: planDebts(debts, extraPerMonth, "snowball")
+  };
+}
 
 // ../../packages/ledger/dist/format/json.js
 var ROOT = "Finances";
@@ -1004,6 +1177,12 @@ function addAccount(app, name, role, currency) {
     }
   });
 }
+function updateAccount(app, id2, patch) {
+  return mutate(app, (s) => {
+    const i = s.accounts.findIndex((a) => a.id === id2);
+    if (i >= 0) s.accounts[i] = { ...s.accounts[i], ...patch };
+  });
+}
 function addGroup(app, name) {
   return mutate(app, (s) => {
     s.groups.push({ id: newId("grp"), name: name.trim(), order: s.groups.length });
@@ -1033,6 +1212,26 @@ function reconcileAccount(app, accountId, statementMinor) {
     for (const t of s.transactions) {
       if (t.accountId === accountId && t.status === "cleared") t.status = "reconciled";
     }
+  });
+}
+function upsertHolding(app, h) {
+  return mutate(app, (s) => {
+    const i = s.holdings.findIndex((x) => x.accountId === h.accountId && x.symbol.toUpperCase() === h.symbol.toUpperCase());
+    if (i >= 0) s.holdings[i] = { ...h, symbol: h.symbol.toUpperCase() };
+    else s.holdings.push({ ...h, symbol: h.symbol.toUpperCase() });
+  });
+}
+function deleteHolding(app, accountId, symbol) {
+  return mutate(app, (s) => {
+    s.holdings = s.holdings.filter((h) => !(h.accountId === accountId && h.symbol.toUpperCase() === symbol.toUpperCase()));
+  });
+}
+function addPrice(app, price) {
+  return mutate(app, (s) => {
+    const sym = price.symbol.toUpperCase();
+    const i = s.prices.findIndex((p) => p.symbol.toUpperCase() === sym && p.date === price.date);
+    if (i >= 0) s.prices[i] = { ...price, symbol: sym };
+    else s.prices.push({ ...price, symbol: sym });
   });
 }
 function splitCategory(full) {
@@ -2163,8 +2362,360 @@ var ScheduledEditModal = class extends BottomSheetModal {
   }
 };
 
-// src/conflicts.ts
+// src/planning-modals.ts
 var import_obsidian10 = require("obsidian");
+var InvestmentsModal = class extends BottomSheetModal {
+  constructor(app, onDone) {
+    super(app);
+    this.onDone = onDone;
+    this.accountId = "";
+  }
+  renderBody(root) {
+    scopeEl(root);
+    this.titleEl.setText("Investments");
+    this.body = root.createDiv();
+    void this.refresh();
+  }
+  async refresh() {
+    this.snapshot = await loadSnapshot(this.app);
+    const invAccts = this.snapshot.accounts.filter((a) => a.role === "investment" && !a.closed);
+    if (invAccts.length && !invAccts.some((a) => a.id === this.accountId)) this.accountId = invAccts[0].id;
+    this.paint(invAccts);
+    this.onDone();
+  }
+  paint(invAccts) {
+    var _a, _b, _c, _d;
+    const c = this.body;
+    c.empty();
+    if (invAccts.length === 0) {
+      c.createDiv({ cls: "tr-muted", text: "No investment accounts yet. Add one (type \u201CInvestment\u201D) from the Accounts tab, then track holdings here." });
+      return;
+    }
+    new import_obsidian10.Setting(c).setName("Account").addDropdown((d) => {
+      for (const a of invAccts) d.addOption(a.id, a.name);
+      d.setValue(this.accountId).onChange((v) => {
+        this.accountId = v;
+        void this.refresh();
+      });
+    });
+    const cur = (_b = (_a = this.snapshot.accounts.find((a) => a.id === this.accountId)) == null ? void 0 : _a.currency) != null ? _b : this.snapshot.baseCurrency;
+    const holdings = this.snapshot.holdings.filter((h) => h.accountId === this.accountId);
+    const total = investmentValue(this.snapshot, this.accountId);
+    const tot = c.createDiv({ cls: "tr-rta is-ok" });
+    tot.createSpan({ cls: "tr-rta-label", text: "Market value" });
+    tot.createSpan({ cls: "tr-rta-value", text: formatMoney(total, cur) });
+    if (holdings.length === 0) {
+      c.createDiv({ cls: "tr-muted", text: "No holdings. Add a symbol with its share count." });
+    }
+    for (const h of holdings) {
+      const px = latestPrice(this.snapshot, h.symbol);
+      const value = px != null ? Math.round(h.quantity * px) : (_c = h.costBasis) != null ? _c : 0;
+      const row = c.createDiv({ cls: "tr-sched-row" });
+      const left = row.createDiv();
+      left.createDiv({ cls: "tr-sched-payee", text: `${h.symbol} \xB7 ${h.quantity}` });
+      left.createDiv({
+        cls: "tr-sched-sub",
+        text: px != null ? `${formatMoney(px, cur)}/unit \u2192 ${formatMoney(value, cur)}` : `no price \xB7 cost ${formatMoney((_d = h.costBasis) != null ? _d : 0, cur)}`
+      });
+      const acts = row.createDiv({ cls: "tr-rule-actions" });
+      acts.createEl("button", { cls: "tr-btn", text: "Price" }).addEventListener("click", () => this.pricePrompt(h.symbol, cur));
+      acts.createEl("button", { cls: "tr-btn", text: "\u2715" }).addEventListener("click", () => void deleteHolding(this.app, this.accountId, h.symbol).then(() => this.refresh()));
+    }
+    c.createEl("button", { cls: "tr-primary", text: "\uFF0B Holding" }).addEventListener("click", () => this.holdingPrompt(cur));
+  }
+  holdingPrompt(currency) {
+    new HoldingEditModal(this.app, this.accountId, currency, () => void this.refresh()).open();
+  }
+  pricePrompt(symbol, currency) {
+    new PriceEditModal(this.app, symbol, currency, () => void this.refresh()).open();
+  }
+};
+var HoldingEditModal = class extends BottomSheetModal {
+  constructor(app, accountId, currency, onDone) {
+    super(app);
+    this.accountId = accountId;
+    this.currency = currency;
+    this.onDone = onDone;
+    this.symbol = "";
+    this.qty = "";
+    this.cost = "";
+  }
+  renderBody(root) {
+    scopeEl(root);
+    this.titleEl.setText("Add holding");
+    new import_obsidian10.Setting(root).setName("Symbol").addText((t) => t.setPlaceholder("e.g. VTI").onChange((v) => this.symbol = v));
+    new import_obsidian10.Setting(root).setName("Quantity").addText((t) => {
+      t.inputEl.inputMode = "decimal";
+      t.onChange((v) => this.qty = v);
+    });
+    new import_obsidian10.Setting(root).setName("Cost basis (optional)").setDesc("Used for value until you enter a price.").addText((t) => {
+      t.inputEl.inputMode = "decimal";
+      t.onChange((v) => this.cost = v);
+    });
+    root.createEl("button", { cls: "tr-primary", text: "Save" }).addEventListener("click", () => void this.save());
+  }
+  async save() {
+    var _a;
+    const quantity = Number(this.qty);
+    if (!this.symbol.trim() || !isFinite(quantity) || quantity <= 0) {
+      new import_obsidian10.Notice("Enter a symbol and a positive quantity.");
+      return;
+    }
+    const costBasis = this.cost.trim() ? (_a = parseMoney(this.cost, this.currency)) != null ? _a : void 0 : void 0;
+    const h = { accountId: this.accountId, symbol: this.symbol.trim(), quantity, costBasis: costBasis != null ? costBasis : void 0 };
+    await upsertHolding(this.app, h);
+    this.onDone();
+    this.close();
+  }
+};
+var PriceEditModal = class extends BottomSheetModal {
+  constructor(app, symbol, currency, onDone) {
+    super(app);
+    this.symbol = symbol;
+    this.currency = currency;
+    this.onDone = onDone;
+    this.price = "";
+    this.date = todayISO();
+  }
+  renderBody(root) {
+    scopeEl(root);
+    this.titleEl.setText(`Price \xB7 ${this.symbol}`);
+    new import_obsidian10.Setting(root).setName("Price per unit").addText((t) => {
+      t.inputEl.inputMode = "decimal";
+      t.onChange((v) => this.price = v);
+    });
+    new import_obsidian10.Setting(root).setName("As of").addText((t) => {
+      t.inputEl.type = "date";
+      t.setValue(this.date).onChange((v) => this.date = v || this.date);
+    });
+    root.createEl("button", { cls: "tr-primary", text: "Save" }).addEventListener("click", () => void this.save());
+  }
+  async save() {
+    const minor = parseMoney(this.price, this.currency);
+    if (minor == null || minor <= 0) {
+      new import_obsidian10.Notice("Enter a price.");
+      return;
+    }
+    await addPrice(this.app, { date: this.date, symbol: this.symbol, price: minor, currency: this.currency });
+    this.onDone();
+    this.close();
+  }
+};
+var DebtModal = class extends BottomSheetModal {
+  constructor(app, onDone) {
+    super(app);
+    this.onDone = onDone;
+    this.extraText = "";
+    this.strategy = "avalanche";
+  }
+  renderBody(root) {
+    scopeEl(root);
+    this.titleEl.setText("Debt payoff");
+    this.body = root.createDiv();
+    void this.refresh();
+  }
+  async refresh() {
+    this.snapshot = await loadSnapshot(this.app);
+    this.paint();
+    this.onDone();
+  }
+  debtAccounts() {
+    return this.snapshot.accounts.filter((a) => (a.role === "credit" || a.role === "loan") && !a.closed && accountBalance(this.snapshot, a.id) < 0);
+  }
+  paint() {
+    var _a, _b, _c, _d, _e, _f;
+    const c = this.body;
+    c.empty();
+    const cur = this.snapshot.baseCurrency;
+    const accts = this.debtAccounts();
+    if (accts.length === 0) {
+      c.createDiv({ cls: "tr-muted", text: "No debts with a balance. Credit cards and loans with a negative balance appear here." });
+      return;
+    }
+    c.createDiv({ cls: "tr-group" }).createSpan({ cls: "tr-group-name", text: "Your debts" });
+    for (const a of accts) {
+      const owed = -accountBalance(this.snapshot, a.id);
+      const apr = (_b = (_a = a.loan) == null ? void 0 : _a.apr) != null ? _b : 0;
+      const min = (_d = (_c = a.loan) == null ? void 0 : _c.minimumPayment) != null ? _d : 0;
+      const row = c.createDiv({ cls: "tr-sched-row" });
+      const left = row.createDiv();
+      left.createDiv({ cls: "tr-sched-payee", text: `${a.name} \xB7 ${formatMoney(owed, a.currency)}` });
+      left.createDiv({ cls: "tr-sched-sub", text: `${(apr * 100).toFixed(2)}% APR \xB7 min ${formatMoney(min, a.currency)}` });
+      row.createDiv({ cls: "tr-rule-actions" }).createEl("button", { cls: "tr-btn", text: "Terms" }).addEventListener("click", () => new DebtTermsModal(this.app, a, () => void this.refresh()).open());
+    }
+    const seg = c.createDiv({ cls: "tr-seg" });
+    const av = seg.createEl("button", { cls: "tr-seg-btn" + (this.strategy === "avalanche" ? " is-on" : ""), text: "Avalanche" });
+    const sn = seg.createEl("button", { cls: "tr-seg-btn" + (this.strategy === "snowball" ? " is-on" : ""), text: "Snowball" });
+    av.addEventListener("click", () => {
+      this.strategy = "avalanche";
+      this.paint();
+    });
+    sn.addEventListener("click", () => {
+      this.strategy = "snowball";
+      this.paint();
+    });
+    new import_obsidian10.Setting(c).setName("Extra per month").setDesc("On top of minimums, redirected as each debt clears.").addText((t) => {
+      t.inputEl.inputMode = "decimal";
+      t.setValue(this.extraText).onChange((v) => {
+        this.extraText = v;
+      });
+      t.inputEl.addEventListener("blur", () => this.paint());
+    });
+    const extra = (_e = parseMoney(this.extraText, cur)) != null ? _e : 0;
+    const debts = accts.map((a) => {
+      var _a2, _b2, _c2, _d2;
+      return {
+        id: a.id,
+        name: a.name,
+        balance: -accountBalance(this.snapshot, a.id),
+        apr: (_b2 = (_a2 = a.loan) == null ? void 0 : _a2.apr) != null ? _b2 : 0,
+        minimum: (_d2 = (_c2 = a.loan) == null ? void 0 : _c2.minimumPayment) != null ? _d2 : 0
+      };
+    });
+    const plan = planDebts(debts, extra, this.strategy);
+    const both = compareStrategies(debts, extra);
+    const res = c.createDiv({ cls: "tr-plan-result" });
+    if (plan.neverPayoff) {
+      res.createDiv({ cls: "tr-avail is-neg", text: "These payments don't cover the interest \u2014 increase the extra or the minimums." });
+    } else {
+      res.createDiv({ cls: "tr-plan-headline", text: `Debt-free in ${plan.months} month${plan.months === 1 ? "" : "s"}` });
+      res.createDiv({ cls: "tr-muted", text: `Total interest ${formatMoney(plan.totalInterest, cur)} \xB7 total paid ${formatMoney(plan.totalPaid, cur)}` });
+      if (!both.avalanche.neverPayoff && !both.snowball.neverPayoff) {
+        const saving = both.snowball.totalInterest - both.avalanche.totalInterest;
+        if (saving > 0) res.createDiv({ cls: "tr-muted", text: `Avalanche saves ${formatMoney(saving, cur)} in interest vs snowball.` });
+      }
+    }
+    const nameById = new Map(accts.map((a) => [a.id, a.name]));
+    const ord = c.createDiv();
+    ord.createDiv({ cls: "tr-group" }).createSpan({ cls: "tr-group-name", text: "Payoff order" });
+    let step = 1;
+    for (const id2 of plan.order) {
+      const po = plan.payoff[id2];
+      const line = ord.createDiv({ cls: "tr-sched-row" });
+      line.createDiv({ cls: "tr-sched-payee", text: `${step++}. ${(_f = nameById.get(id2)) != null ? _f : id2}` });
+      line.createDiv({ cls: "tr-sched-sub", text: plan.neverPayoff || po.monthsToPayoff === 0 ? "\u2014" : `paid off month ${po.monthsToPayoff} \xB7 interest ${formatMoney(po.interestPaid, cur)}` });
+    }
+  }
+};
+var DebtTermsModal = class extends BottomSheetModal {
+  constructor(app, account, onDone) {
+    var _a, _b;
+    super(app);
+    this.account = account;
+    this.onDone = onDone;
+    this.aprText = ((_a = account.loan) == null ? void 0 : _a.apr) != null ? String(account.loan.apr * 100) : "";
+    this.minText = ((_b = account.loan) == null ? void 0 : _b.minimumPayment) != null ? String(account.loan.minimumPayment / 100) : "";
+  }
+  renderBody(root) {
+    scopeEl(root);
+    this.titleEl.setText(`Terms \xB7 ${this.account.name}`);
+    new import_obsidian10.Setting(root).setName("APR %").setDesc("Annual interest rate, e.g. 19.99").addText((t) => {
+      t.inputEl.inputMode = "decimal";
+      t.setValue(this.aprText).onChange((v) => this.aprText = v);
+    });
+    new import_obsidian10.Setting(root).setName("Minimum payment").addText((t) => {
+      t.inputEl.inputMode = "decimal";
+      t.setValue(this.minText).onChange((v) => this.minText = v);
+    });
+    root.createEl("button", { cls: "tr-primary", text: "Save" }).addEventListener("click", () => void this.save());
+  }
+  async save() {
+    const aprPct = Number(this.aprText);
+    const min = parseMoney(this.minText, this.account.currency);
+    const loan = {
+      ...this.account.loan,
+      apr: isFinite(aprPct) && this.aprText.trim() ? aprPct / 100 : void 0,
+      minimumPayment: min != null ? min : void 0
+    };
+    await updateAccount(this.app, this.account.id, { loan });
+    this.onDone();
+    this.close();
+  }
+};
+var ForecastModal = class extends BottomSheetModal {
+  constructor(app, onDone) {
+    super(app);
+    this.onDone = onDone;
+    this.horizon = 90;
+  }
+  renderBody(root) {
+    scopeEl(root);
+    this.titleEl.setText("Cash-flow forecast");
+    this.body = root.createDiv();
+    void this.refresh();
+  }
+  async refresh() {
+    this.snapshot = await loadSnapshot(this.app);
+    this.paint();
+    this.onDone();
+  }
+  paint() {
+    const c = this.body;
+    c.empty();
+    const cur = this.snapshot.baseCurrency;
+    const r = projectCashFlow(this.snapshot, this.horizon);
+    const seg = c.createDiv({ cls: "tr-seg" });
+    for (const days of [30, 60, 90, 180]) {
+      const b = seg.createEl("button", { cls: "tr-seg-btn" + (this.horizon === days ? " is-on" : ""), text: `${days}d` });
+      b.addEventListener("click", () => {
+        this.horizon = days;
+        this.paint();
+      });
+    }
+    const head = c.createDiv({ cls: "tr-rta " + (r.low < 0 ? "is-bad" : "is-ok") });
+    head.createSpan({ cls: "tr-rta-label", text: "Cash now" });
+    head.createSpan({ cls: "tr-rta-value", text: formatMoney(r.start, cur) });
+    const stats = c.createDiv({ cls: "tr-plan-result" });
+    stats.createDiv({ text: `Projected in ${this.horizon} days: ${formatMoney(r.end, cur)}` });
+    stats.createDiv({ cls: r.low < 0 ? "tr-avail is-neg" : "tr-muted", text: `Low point: ${formatMoney(r.low, cur)} on ${r.lowDate}` });
+    if (r.firstNegative) stats.createDiv({ cls: "tr-avail is-neg", text: `\u26A0 Goes negative on ${r.firstNegative}` });
+    else stats.createDiv({ cls: "tr-muted", text: "Stays positive across the horizon." });
+    this.sparkline(c, r.start, r.points.map((p) => p.balance));
+    if (r.points.length === 0) {
+      c.createDiv({ cls: "tr-muted", text: "No scheduled cash movements in this window. Add recurring bills and income in Upcoming to see the projection." });
+      return;
+    }
+    c.createDiv({ cls: "tr-group" }).createSpan({ cls: "tr-group-name", text: "Upcoming movements" });
+    for (const p of r.points) {
+      const row = c.createDiv({ cls: "tr-sched-row" });
+      const left = row.createDiv();
+      left.createDiv({ cls: "tr-sched-payee", text: p.labels.join(", ") });
+      left.createDiv({ cls: "tr-sched-sub", text: `${p.date} \xB7 ${formatMoney(p.delta, cur, { signed: true })}` });
+      row.createDiv({ cls: "tr-c-num " + (p.balance < 0 ? "is-neg" : "is-pos"), text: formatMoney(p.balance, cur) });
+    }
+  }
+  /** Minimal inline SVG sparkline of the projected balance (zero baseline). */
+  sparkline(parent, start, series) {
+    const values = [start, ...series];
+    if (values.length < 2) return;
+    const W = 280;
+    const H = 60;
+    const min = Math.min(0, ...values);
+    const max = Math.max(0, ...values);
+    const span = max - min || 1;
+    const x = (i) => i / (values.length - 1) * W;
+    const y = (v) => H - (v - min) / span * H;
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = parent.createSvg("svg", { cls: "tr-spark", attr: { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none" } });
+    const zeroY = y(0);
+    const base = document.createElementNS(NS, "line");
+    base.setAttribute("x1", "0");
+    base.setAttribute("x2", String(W));
+    base.setAttribute("y1", String(zeroY));
+    base.setAttribute("y2", String(zeroY));
+    base.setAttribute("class", "tr-spark-zero");
+    svg.appendChild(base);
+    const d = values.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("class", "tr-spark-line" + (min < 0 ? " is-neg" : ""));
+    path.setAttribute("fill", "none");
+    svg.appendChild(path);
+  }
+};
+
+// src/conflicts.ts
+var import_obsidian11 = require("obsidian");
 var ROOT3 = "Finances";
 function baseOf(path) {
   const m = path.match(/^(.*)\.sync-conflict-[^/]*(\.md)$/);
@@ -2185,9 +2736,9 @@ async function resolveConflicts(app) {
       report.configConflicts.push(file.path);
       continue;
     }
-    const baseAbstract = app.vault.getAbstractFileByPath((0, import_obsidian10.normalizePath)(basePath));
-    if (!(baseAbstract instanceof import_obsidian10.TFile)) {
-      await app.vault.rename(file, (0, import_obsidian10.normalizePath)(basePath)).catch(() => {
+    const baseAbstract = app.vault.getAbstractFileByPath((0, import_obsidian11.normalizePath)(basePath));
+    if (!(baseAbstract instanceof import_obsidian11.TFile)) {
+      await app.vault.rename(file, (0, import_obsidian11.normalizePath)(basePath)).catch(() => {
       });
       report.resolved++;
       continue;
@@ -2209,7 +2760,7 @@ async function resolveConflicts(app) {
 
 // src/view.ts
 var VIEW_TYPE_TREASURY = "treasury-view";
-var TreasuryView = class extends import_obsidian11.ItemView {
+var TreasuryView = class extends import_obsidian12.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -2271,7 +2822,7 @@ var TreasuryView = class extends import_obsidian11.ItemView {
       const r = await resolveConflicts(this.app);
       const extra = r.unresolved.length ? ` ${r.unresolved.reduce((n, u) => n + u.ids.length, 0)} record(s) need review.` : "";
       const cfg = r.configConflicts.length ? ` ${r.configConflicts.length} file(s) left for manual review.` : "";
-      new import_obsidian11.Notice(`Merged ${r.resolved} conflict file(s).${extra}${cfg}`);
+      new import_obsidian12.Notice(`Merged ${r.resolved} conflict file(s).${extra}${cfg}`);
       await this.render();
     });
   }
@@ -2285,7 +2836,7 @@ var TreasuryView = class extends import_obsidian11.ItemView {
     wrap.createDiv({ cls: "tr-muted", text: "Every dollar gets a job. Start with a small scaffold you can shape \u2014 accounts, categories, and transactions are all editable." });
     wrap.createEl("button", { cls: "tr-primary", text: "Create a starter budget" }).addEventListener("click", async () => {
       await saveSnapshot(this.app, starterBudget());
-      new import_obsidian11.Notice("Treasury initialised.");
+      new import_obsidian12.Notice("Treasury initialised.");
       await this.render();
     });
   }
@@ -2392,6 +2943,19 @@ var TreasuryView = class extends import_obsidian11.ItemView {
       "click",
       () => new ImportModal(this.app, () => void this.render()).open()
     );
+    const plan = root.createDiv({ cls: "tr-acct-actions" });
+    plan.createEl("button", { cls: "tr-add-row", text: "\u{1F4C8} Forecast" }).addEventListener(
+      "click",
+      () => new ForecastModal(this.app, () => void this.render()).open()
+    );
+    plan.createEl("button", { cls: "tr-add-row", text: "\u{1F4B3} Debt payoff" }).addEventListener(
+      "click",
+      () => new DebtModal(this.app, () => void this.render()).open()
+    );
+    plan.createEl("button", { cls: "tr-add-row", text: "\u{1F4CA} Investments" }).addEventListener(
+      "click",
+      () => new InvestmentsModal(this.app, () => void this.render()).open()
+    );
   }
   // ------------------------------------------------------------ upcoming tab
   renderUpcoming(root, s) {
@@ -2431,7 +2995,7 @@ function monthLabel(month) {
 }
 
 // src/main.ts
-var TreasuryPlugin = class extends import_obsidian12.Plugin {
+var TreasuryPlugin = class extends import_obsidian13.Plugin {
   async onload() {
     this.registerView(VIEW_TYPE_TREASURY, (leaf) => new TreasuryView(leaf, this));
     applyUiStyles(this);
@@ -2456,11 +3020,11 @@ var TreasuryPlugin = class extends import_obsidian12.Plugin {
       name: "Resolve sync conflicts",
       callback: async () => {
         if (!hasConflicts(this.app)) {
-          new import_obsidian12.Notice("No sync conflicts.");
+          new import_obsidian13.Notice("No sync conflicts.");
           return;
         }
         const r = await resolveConflicts(this.app);
-        new import_obsidian12.Notice(`Merged ${r.resolved} conflict file(s).`);
+        new import_obsidian13.Notice(`Merged ${r.resolved} conflict file(s).`);
         this.refreshViews();
       }
     });
@@ -2474,11 +3038,26 @@ var TreasuryPlugin = class extends import_obsidian12.Plugin {
       name: "Manage scheduled transactions",
       callback: () => new ScheduledModal(this.app, () => this.refreshViews()).open()
     });
+    this.addCommand({
+      id: "cash-flow-forecast",
+      name: "Cash-flow forecast",
+      callback: () => new ForecastModal(this.app, () => this.refreshViews()).open()
+    });
+    this.addCommand({
+      id: "debt-payoff",
+      name: "Debt-payoff planner",
+      callback: () => new DebtModal(this.app, () => this.refreshViews()).open()
+    });
+    this.addCommand({
+      id: "investments",
+      name: "Investments & holdings",
+      callback: () => new InvestmentsModal(this.app, () => this.refreshViews()).open()
+    });
     this.registerObsidianProtocolHandler("treasury", () => new TransactionModal(this.app, () => this.refreshViews()).open());
     this.app.workspace.onLayoutReady(() => {
       void processAutoEnter(this.app).then((n) => {
         if (n > 0) {
-          new import_obsidian12.Notice(`Treasury: entered ${n} scheduled transaction${n === 1 ? "" : "s"}.`);
+          new import_obsidian13.Notice(`Treasury: entered ${n} scheduled transaction${n === 1 ? "" : "s"}.`);
           this.refreshViews();
         }
       });
