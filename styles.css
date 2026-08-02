@@ -126,3 +126,16 @@
 .tr-status.is-offline { color: var(--text-warning, #b9830a); }
 .tr-status.is-offline .mrd-status-value { color: var(--text-warning, #b9830a); font-weight: 600; }
 .tr-status.has-conflicts .mrd-status-value { color: var(--text-error); }
+/* discreet mode — blur amounts until the eye is tapped */
+.tr-root.is-discreet .tr-rta-value,
+.tr-root.is-discreet .tr-c-num,
+.tr-root.is-discreet .tr-acct-bal,
+.tr-root.is-discreet .tr-acct-bals .tr-muted,
+.tr-root.is-discreet .tr-group-total,
+.tr-root.is-discreet .tr-sched-sub {
+	filter: blur(6px);
+	transition: filter 0.12s ease;
+	-webkit-user-select: none;
+	user-select: none;
+}
+.tr-eye { min-width: 34px; }

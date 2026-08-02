@@ -27,7 +27,7 @@ __export(main_exports, {
   default: () => TreasuryPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian15 = require("obsidian");
+var import_obsidian16 = require("obsidian");
 
 // ../../packages/ui/dist/constants.js
 var CLS = "mrd";
@@ -322,7 +322,17 @@ function computeBudget(snapshot, throughMonth = monthOf(todayISO())) {
         continue;
       for (const p of t.postings) {
         if (p.transferAccountId) {
-          applyTransfer(acct, accounts.get(p.transferAccountId), p.amount, avail, (d) => rta += d);
+          const other = accounts.get(p.transferAccountId);
+          if (other && p.categoryId && isOnBudget(acct) !== isOnBudget(other)) {
+            const cat2 = categories.get(p.categoryId);
+            if (cat2 && cat2.kind !== "income") {
+              const onMove = isOnBudget(acct) ? p.amount : -p.amount;
+              avail.add(cat2.id, onMove);
+              activity.add(cat2.id, onMove);
+              continue;
+            }
+          }
+          applyTransfer(acct, other, p.amount, avail, (d) => rta += d);
           continue;
         }
         if (!p.categoryId)
@@ -336,15 +346,22 @@ function computeBudget(snapshot, throughMonth = monthOf(todayISO())) {
           activity.add(cat.id, p.amount);
           continue;
         }
+        const payCatId = acct.paymentCategoryId;
         if (acct.role === "credit" && p.amount < 0) {
           const before = avail.get(cat.id);
           const covered = clamp(before, 0, -p.amount);
-          const payCatId = acct.paymentCategoryId;
           if (payCatId) {
             avail.add(payCatId, covered);
             activity.add(payCatId, covered);
           }
           creditFloat.add(cat.id, -p.amount - covered);
+        } else if (acct.role === "credit" && p.amount > 0 && payCatId) {
+          const setAside = avail.get(payCatId);
+          const released = clamp(setAside, 0, p.amount);
+          if (released > 0) {
+            avail.add(payCatId, -released);
+            activity.add(payCatId, -released);
+          }
         }
         avail.add(cat.id, p.amount);
         activity.add(cat.id, p.amount);
@@ -1312,10 +1329,10 @@ function id(prefix) {
   const rand = (c == null ? void 0 : c.randomUUID) ? c.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   return `${prefix}_${rand}`;
 }
-function starterBudget() {
-  const s = emptySnapshot("USD", monthOf(todayISO()));
+function starterBudget(currency = "USD") {
+  const s = emptySnapshot(currency, monthOf(todayISO()));
   const checking = id("acc");
-  s.accounts = [{ id: checking, name: "Checking", role: "cash", currency: "USD" }];
+  s.accounts = [{ id: checking, name: "Checking", role: "cash", currency }];
   const gBills = id("grp");
   const gEveryday = id("grp");
   s.groups = [
@@ -1978,6 +1995,8 @@ var TransactionModal = class extends BottomSheetModal {
     this.memo = "";
     this.cleared = true;
     this.manualTarget = false;
+    /** Budget category for a transfer INTO an off-budget account (§4.2). */
+    this.transferCategory = "";
     this.snapshot = null;
   }
   renderBody(root) {
@@ -2047,8 +2066,11 @@ var TransactionModal = class extends BottomSheetModal {
       d.onChange((v) => {
         this.target = v;
         this.manualTarget = true;
+        this.refreshTransferCategory();
       });
     });
+    this.xferCatRow = root.createDiv();
+    this.refreshTransferCategory();
     new import_obsidian6.Setting(root).setName("Memo").addText((t) => t.setValue(this.memo).onChange((v) => this.memo = v));
     new import_obsidian6.Setting(root).setName("Date").addText((t) => {
       t.inputEl.type = "date";
@@ -2071,7 +2093,33 @@ var TransactionModal = class extends BottomSheetModal {
       this.direction = p.amount < 0 ? "out" : "in";
       this.amountText = (Math.abs(p.amount) / Math.pow(10, spec("USD").scale)).toString();
       this.target = p.transferAccountId ? `a:${p.transferAccountId}` : p.categoryId ? `c:${p.categoryId}` : "";
+      if (p.transferAccountId && p.categoryId) this.transferCategory = p.categoryId;
     }
+  }
+  /** Show a budget-category picker only when the target is a transfer into an
+   * off-budget account; hide it otherwise. */
+  refreshTransferCategory() {
+    const row = this.xferCatRow;
+    const s = this.snapshot;
+    if (!row || !s) return;
+    row.empty();
+    if (!this.target.startsWith("a:")) {
+      this.transferCategory = "";
+      return;
+    }
+    const dest = s.accounts.find((a) => a.id === this.target.slice(2));
+    if (!dest || isOnBudget(dest)) {
+      this.transferCategory = "";
+      return;
+    }
+    new import_obsidian6.Setting(row).setName("Budget category").setDesc(`Optional \u2014 assign this contribution to ${dest.name} against an envelope.`).addDropdown((d) => {
+      d.addOption("", "\u2014 none (leaves budget) \u2014");
+      for (const c of [...s.categories].sort((a, b) => a.order - b.order)) {
+        if (c.kind !== "spending") continue;
+        d.addOption(c.id, c.name);
+      }
+      d.setValue(this.transferCategory).onChange((v) => this.transferCategory = v);
+    });
   }
   autosuggest() {
     var _a;
@@ -2098,7 +2146,7 @@ var TransactionModal = class extends BottomSheetModal {
       if (act.flag) flag = act.flag;
       if (act.payee) payee = act.payee;
     }
-    const posting = this.target.startsWith("a:") ? { transferAccountId: this.target.slice(2), amount: signed } : this.target.startsWith("c:") ? { categoryId: this.target.slice(2), amount: signed } : { amount: signed };
+    const posting = this.target.startsWith("a:") ? this.transferCategory ? { transferAccountId: this.target.slice(2), categoryId: this.transferCategory, amount: signed } : { transferAccountId: this.target.slice(2), amount: signed } : this.target.startsWith("c:") ? { categoryId: this.target.slice(2), amount: signed } : { amount: signed };
     const base = {
       date: this.date,
       accountId: this.accountId,
@@ -3357,6 +3405,8 @@ var TreasuryView = class extends import_obsidian14.ItemView {
     this.tab = "budget";
     this.month = monthOf(todayISO());
     this.snapshot = null;
+    /** Session-only override to reveal amounts while discreet mode is on. */
+    this.revealed = false;
   }
   getViewType() {
     return VIEW_TYPE_TREASURY;
@@ -3380,6 +3430,7 @@ var TreasuryView = class extends import_obsidian14.ItemView {
     root.empty();
     scopeEl(root);
     root.addClass("tr-root");
+    root.toggleClass("is-discreet", this.plugin.settings.discreetMode && !this.revealed);
     const s = this.snapshot = await loadSnapshot(this.app);
     if (!hasData(s)) {
       this.renderEmpty(root);
@@ -3402,6 +3453,13 @@ var TreasuryView = class extends import_obsidian14.ItemView {
       const b = tabs.createEl("button", { cls: "tr-tab" + (this.tab === id2 ? " is-on" : ""), text: label });
       b.addEventListener("click", () => {
         this.tab = id2;
+        void this.render();
+      });
+    }
+    if (this.plugin.settings.discreetMode) {
+      const eye = tabs.createEl("button", { cls: "tr-tab tr-eye", text: this.revealed ? "\u{1F648}" : "\u{1F441}", attr: { "aria-label": "Toggle amount visibility" } });
+      eye.addEventListener("click", () => {
+        this.revealed = !this.revealed;
         void this.render();
       });
     }
@@ -3445,11 +3503,22 @@ var TreasuryView = class extends import_obsidian14.ItemView {
     const wrap = root.createDiv({ cls: "tr-empty" });
     wrap.createEl("h2", { text: "MERIDIAN TREASURY" });
     wrap.createDiv({ cls: "tr-muted", text: "Every dollar gets a job. Start with a small scaffold you can shape \u2014 accounts, categories, and transactions are all editable." });
+    let currency = this.plugin.settings.onboardingCurrency;
+    new import_obsidian14.Setting(wrap).setName("Currency").addDropdown((d) => {
+      for (const code of Object.keys(CURRENCIES)) d.addOption(code, code);
+      d.setValue(currency).onChange((v) => currency = v);
+    });
     wrap.createEl("button", { cls: "tr-primary", text: "Create a starter budget" }).addEventListener("click", async () => {
-      await saveSnapshot(this.app, starterBudget());
+      this.plugin.settings.onboardingCurrency = currency;
+      await this.plugin.saveSettings();
+      await saveSnapshot(this.app, starterBudget(currency));
       new import_obsidian14.Notice("Treasury initialised.");
       await this.render();
     });
+    wrap.createEl("button", { cls: "tr-btn", text: "Import from YNAB / CSV / OFX instead" }).addEventListener(
+      "click",
+      () => new ImportModal(this.app, () => void this.render()).open()
+    );
   }
   // ------------------------------------------------------------- budget tab
   renderBudget(root, s) {
@@ -3636,11 +3705,57 @@ function monthLabel2(month) {
   return new Date(Date.UTC(y, m - 1, 1)).toLocaleString(void 0, { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
+// src/settings.ts
+var import_obsidian15 = require("obsidian");
+var DEFAULT_SETTINGS = {
+  discreetMode: false,
+  autoEnterOnLoad: true,
+  onboardingCurrency: "USD"
+};
+var TreasurySettingTab = class extends import_obsidian15.PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    new import_obsidian15.Setting(containerEl).setName("Discreet mode").setDesc("Blur balances and amounts until you tap the eye in the Treasury view. Handy on the train.").addToggle(
+      (t) => t.setValue(this.plugin.settings.discreetMode).onChange(async (v) => {
+        this.plugin.settings.discreetMode = v;
+        await this.plugin.saveSettings();
+        this.plugin.refreshViews();
+      })
+    );
+    new import_obsidian15.Setting(containerEl).setName("Auto-enter scheduled on load").setDesc("When Obsidian opens, automatically post any due auto-enter scheduled transactions (catching up missed periods).").addToggle(
+      (t) => t.setValue(this.plugin.settings.autoEnterOnLoad).onChange(async (v) => {
+        this.plugin.settings.autoEnterOnLoad = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian15.Setting(containerEl).setName("Starter-budget currency").setDesc("Used only when creating a new budget from scratch. Each account can override its own currency later.").addDropdown((d) => {
+      for (const code of Object.keys(CURRENCIES)) d.addOption(code, code);
+      d.setValue(this.plugin.settings.onboardingCurrency).onChange(async (v) => {
+        this.plugin.settings.onboardingCurrency = v;
+        await this.plugin.saveSettings();
+      });
+    });
+    const about = containerEl.createEl("p", { cls: "setting-item-description" });
+    about.setText("MERIDIAN Treasury keeps your ledger as open JSON inside Markdown files under Finances/, so it syncs cleanly across devices and stays yours. No bank connection \u2014 import only.");
+  }
+};
+
 // src/main.ts
-var TreasuryPlugin = class extends import_obsidian15.Plugin {
+var TreasuryPlugin = class extends import_obsidian16.Plugin {
+  constructor() {
+    super(...arguments);
+    this.settings = { ...DEFAULT_SETTINGS };
+  }
   async onload() {
+    await this.loadSettings();
     this.registerView(VIEW_TYPE_TREASURY, (leaf) => new TreasuryView(leaf, this));
     applyUiStyles(this);
+    this.addSettingTab(new TreasurySettingTab(this.app, this));
     this.addRibbonIcon("wallet", "Open Treasury", () => void this.openBudget());
     this.addCommand({
       id: "open-treasury",
@@ -3662,11 +3777,11 @@ var TreasuryPlugin = class extends import_obsidian15.Plugin {
       name: "Resolve sync conflicts",
       callback: async () => {
         if (!hasConflicts(this.app)) {
-          new import_obsidian15.Notice("No sync conflicts.");
+          new import_obsidian16.Notice("No sync conflicts.");
           return;
         }
         const r = await resolveConflicts(this.app);
-        new import_obsidian15.Notice(`Merged ${r.resolved} conflict file(s).`);
+        new import_obsidian16.Notice(`Merged ${r.resolved} conflict file(s).`);
         this.refreshViews();
       }
     });
@@ -3707,13 +3822,20 @@ var TreasuryPlugin = class extends import_obsidian15.Plugin {
     });
     this.registerObsidianProtocolHandler("treasury", () => new TransactionModal(this.app, () => this.refreshViews()).open());
     this.app.workspace.onLayoutReady(() => {
+      if (!this.settings.autoEnterOnLoad) return;
       void processAutoEnter(this.app).then((n) => {
         if (n > 0) {
-          new import_obsidian15.Notice(`Treasury: entered ${n} scheduled transaction${n === 1 ? "" : "s"}.`);
+          new import_obsidian16.Notice(`Treasury: entered ${n} scheduled transaction${n === 1 ? "" : "s"}.`);
           this.refreshViews();
         }
       });
     });
+  }
+  async loadSettings() {
+    this.settings = { ...DEFAULT_SETTINGS, ...await this.loadData() };
+  }
+  async saveSettings() {
+    await this.saveData(this.settings);
   }
   /** Re-render any open Treasury view after a mutation from a command/URI. */
   refreshViews() {
