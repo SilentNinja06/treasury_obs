@@ -131,6 +131,11 @@ function spec(code) {
 function unit(code) {
   return Math.pow(10, spec(code).scale);
 }
+function toMinor(major, code) {
+  const u = unit(code);
+  const s = major < 0 ? -1 : 1;
+  return s * Math.round(Math.abs(major) * u);
+}
 function toMajor(m, code) {
   return m / unit(code);
 }
@@ -655,6 +660,83 @@ function importMappedCsv(text, profile, currency) {
 }
 function get(row, idx) {
   return idx >= 0 && idx < row.length ? row[idx].trim() : "";
+}
+function parseOfx(text, currency, accountName) {
+  const out = [];
+  const body = text.slice(Math.max(0, text.indexOf("<OFX")));
+  const acctId = tagValue(body, "ACCTID");
+  const fileCurrency = tagValue(body, "CURDEF") || currency;
+  const account = accountName || (acctId ? `OFX ${acctId.slice(-4).padStart(4, "\u2022")}` : "Imported");
+  for (const block of blocks(body, "STMTTRN")) {
+    const rawDate = tagValue(block, "DTPOSTED");
+    const date = ofxDate(rawDate);
+    if (!date)
+      continue;
+    const trnAmt = tagValue(block, "TRNAMT");
+    const amount = ofxAmount(trnAmt, fileCurrency);
+    if (amount == null)
+      continue;
+    const name = tagValue(block, "NAME") || tagValue(block, "PAYEE");
+    const memo = tagValue(block, "MEMO");
+    const fitid = tagValue(block, "FITID");
+    out.push({
+      date,
+      accountName: account,
+      payee: decodeEntities(name),
+      memo: memo ? decodeEntities(memo) : void 0,
+      amount,
+      importId: fitid ? "ofx_" + fingerprintStr(account + "|" + fitid) : fingerprint([date, account, name, amount])
+    });
+  }
+  return out;
+}
+function tagValue(text, tag) {
+  const re = new RegExp(`<${tag}>([^<\\r\\n]*)`, "i");
+  const m = text.match(re);
+  return m ? m[1].trim() : "";
+}
+function blocks(text, tag) {
+  const out = [];
+  const open = new RegExp(`<${tag}>`, "gi");
+  const closeTag = `</${tag}>`.toLowerCase();
+  let m;
+  const starts = [];
+  while (m = open.exec(text))
+    starts.push(m.index);
+  for (let i = 0; i < starts.length; i++) {
+    const start = starts[i];
+    const lower = text.toLowerCase();
+    const close = lower.indexOf(closeTag, start);
+    const nextOpen = i + 1 < starts.length ? starts[i + 1] : text.length;
+    const end = close >= 0 && close < nextOpen ? close : nextOpen;
+    out.push(text.slice(start, end));
+  }
+  return out;
+}
+function ofxDate(raw) {
+  const m = raw.match(/^\s*(\d{4})(\d{2})(\d{2})/);
+  if (!m)
+    return null;
+  const mo = Number(m[2]);
+  const da = Number(m[3]);
+  if (mo < 1 || mo > 12 || da < 1 || da > 31)
+    return null;
+  return `${m[1]}-${m[2]}-${m[3]}`;
+}
+function ofxAmount(raw, currency) {
+  const s = raw.trim().replace(/,/g, ".");
+  if (!/^-?\d+(\.\d+)?$/.test(s))
+    return null;
+  return toMinor(parseFloat(s), currency);
+}
+function decodeEntities(s) {
+  return s.replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&#38;/g, "&").replace(/&apos;/gi, "'").replace(/&quot;/gi, '"').trim();
+}
+function fingerprintStr(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++)
+    h = (h << 5) + h + s.charCodeAt(i) | 0;
+  return (h >>> 0).toString(36);
 }
 function dedupe(candidates, existing, accountNameById) {
   var _a;
@@ -2178,6 +2260,7 @@ var ImportModal = class extends BottomSheetModal {
     this.dateFormat = "auto";
     this.accountName = "Imported";
     this.profileName = "";
+    this.ofxAccount = "";
   }
   renderBody(root) {
     scopeEl(root);
@@ -2191,12 +2274,13 @@ var ImportModal = class extends BottomSheetModal {
       d.addOption("ynab-register", "YNAB register (Register.csv)");
       d.addOption("ynab-budget", "YNAB budget (Budget.csv)");
       d.addOption("csv", "Generic CSV (map columns)");
+      d.addOption("ofx", "OFX / QFX (bank export)");
       d.setValue(this.source).onChange((v) => {
         this.source = v;
         this.repaint();
       });
     });
-    const file = root.createEl("input", { attr: { type: "file", accept: ".csv,.txt,.md" } });
+    const file = root.createEl("input", { attr: { type: "file", accept: ".csv,.txt,.md,.ofx,.qfx" } });
     file.addEventListener("change", async () => {
       var _a;
       const f = (_a = file.files) == null ? void 0 : _a[0];
@@ -2317,12 +2401,19 @@ var ImportModal = class extends BottomSheetModal {
     const cur = this.snapshot.baseCurrency;
     if (this.source === "ynab-register") return { candidates: importYnabRegister(this.raw, cur) };
     if (this.source === "ynab-budget") return { candidates: [], assignments: importYnabBudget(this.raw, cur) };
+    if (this.source === "ofx") return { candidates: parseOfx(this.raw, cur, this.ofxAccount.trim() || void 0) };
     const profile = { id: "tmp", name: "tmp", map: this.map, dateFormat: this.dateFormat, accountName: this.accountName };
     return { candidates: importMappedCsv(this.raw, profile, cur) };
   }
   renderReview() {
     const b = this.body;
     b.empty();
+    if (this.source === "ofx") {
+      new import_obsidian8.Setting(b).setName("Account").setDesc("Blank = derive from the file. Match an existing account's name to merge.").addText((t) => {
+        t.setPlaceholder("from file").setValue(this.ofxAccount).onChange((v) => this.ofxAccount = v);
+        t.inputEl.addEventListener("blur", () => this.renderReview());
+      });
+    }
     const { candidates, assignments } = this.candidates();
     if (assignments && assignments.length) {
       b.createDiv({ cls: "tr-muted", text: `${assignments.length} monthly assignment${assignments.length === 1 ? "" : "s"} found.` });
