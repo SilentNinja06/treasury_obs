@@ -27,7 +27,7 @@ __export(main_exports, {
   default: () => TreasuryPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian10 = require("obsidian");
+var import_obsidian12 = require("obsidian");
 
 // ../../packages/ui/dist/constants.js
 var CLS = "mrd";
@@ -111,7 +111,7 @@ function scopeEl(el, opts = {}) {
 }
 
 // src/view.ts
-var import_obsidian9 = require("obsidian");
+var import_obsidian11 = require("obsidian");
 
 // ../../packages/ledger/dist/money.js
 var CURRENCIES = {
@@ -436,6 +436,18 @@ function netWorth(snapshot, asOf) {
   }
   return total;
 }
+function nextOccurrence(from, freq, interval) {
+  const d = /* @__PURE__ */ new Date(from + "T00:00:00Z");
+  if (freq === "daily")
+    d.setUTCDate(d.getUTCDate() + interval);
+  else if (freq === "weekly")
+    d.setUTCDate(d.getUTCDate() + 7 * interval);
+  else if (freq === "monthly")
+    return addMonths(from.slice(0, 7), interval) + "-" + from.slice(8, 10);
+  else
+    d.setUTCFullYear(d.getUTCFullYear() + interval);
+  return d.toISOString().slice(0, 10);
+}
 
 // ../../packages/ledger/dist/import.js
 function parseCsv(text) {
@@ -666,6 +678,78 @@ function dedupe(candidates, existing, accountNameById) {
     }
   }
   return { fresh, duplicates };
+}
+
+// ../../packages/ledger/dist/rules.js
+function matchRule(r, ctx) {
+  var _a, _b;
+  if (r.enabled === false)
+    return false;
+  const m = r.match;
+  const hasCondition = !!m.payee || !!m.memoContains || !!m.account || m.amount != null;
+  if (!hasCondition)
+    return false;
+  if (m.payee && !((_a = ctx.payee) !== null && _a !== void 0 ? _a : "").toLowerCase().includes(m.payee.toLowerCase()))
+    return false;
+  if (m.memoContains && !((_b = ctx.memo) !== null && _b !== void 0 ? _b : "").toLowerCase().includes(m.memoContains.toLowerCase()))
+    return false;
+  if (m.account && ctx.accountId !== m.account)
+    return false;
+  if (m.amount != null && ctx.amount !== m.amount)
+    return false;
+  return true;
+}
+function applyRules(rules, ctx) {
+  const out = {};
+  for (const r of [...rules].sort((a, b) => a.order - b.order)) {
+    if (!matchRule(r, ctx))
+      continue;
+    if (r.action.categoryId)
+      out.categoryId = r.action.categoryId;
+    if (r.action.flag)
+      out.flag = r.action.flag;
+    if (r.action.payee)
+      out.payee = r.action.payee;
+  }
+  return out;
+}
+function suggestCategoryFromHistory(transactions, payee) {
+  var _a, _b, _c;
+  if (!payee)
+    return null;
+  const key = payee.trim().toLowerCase();
+  if (!key)
+    return null;
+  const matches = transactions.filter((t) => {
+    var _a2;
+    return ((_a2 = t.payee) !== null && _a2 !== void 0 ? _a2 : "").trim().toLowerCase() === key && t.postings.some((p) => p.categoryId);
+  }).sort((a, b) => b.date.localeCompare(a.date));
+  return (_c = (_b = (_a = matches[0]) === null || _a === void 0 ? void 0 : _a.postings.find((p) => p.categoryId)) === null || _b === void 0 ? void 0 : _b.categoryId) !== null && _c !== void 0 ? _c : null;
+}
+
+// ../../packages/ledger/dist/schedule.js
+function advance(date, freq, interval) {
+  return nextOccurrence(date, freq, interval);
+}
+function isEnded(sched, date) {
+  return !!sched.recurrence.endDate && date > sched.recurrence.endDate;
+}
+function addDaysISO(date, days) {
+  const d = /* @__PURE__ */ new Date(date + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function upcoming(list, asOf, horizonDays = 45) {
+  const horizon = addDaysISO(asOf, horizonDays);
+  const out = [];
+  for (const sched of list) {
+    const d = sched.nextDate;
+    if (!d || isEnded(sched, d))
+      continue;
+    if (d <= horizon)
+      out.push({ scheduled: sched, date: d, overdue: d < asOf });
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date));
 }
 
 // ../../packages/ledger/dist/format/json.js
@@ -991,14 +1075,27 @@ function commitImport(app, candidates, assignments) {
     for (const cand of candidates) {
       if (cand.transferAccountName && cand.amount > 0) continue;
       const acc = ensureAccount(cand.accountName);
-      const posting = cand.transferAccountName ? { transferAccountId: ensureAccount(cand.transferAccountName).id, amount: cand.amount } : cand.categoryName ? { categoryId: ensureCategory(cand.categoryName).id, amount: cand.amount } : { amount: cand.amount };
+      let payee = cand.payee || void 0;
+      let flag;
+      let posting;
+      if (cand.transferAccountName) {
+        posting = { transferAccountId: ensureAccount(cand.transferAccountName).id, amount: cand.amount };
+      } else if (cand.categoryName) {
+        posting = { categoryId: ensureCategory(cand.categoryName).id, amount: cand.amount };
+      } else {
+        const act = applyRules(s.rules, { payee: cand.payee, memo: cand.memo, accountId: acc.id, amount: cand.amount });
+        posting = act.categoryId ? { categoryId: act.categoryId, amount: cand.amount } : { amount: cand.amount };
+        if (act.flag) flag = act.flag;
+        if (act.payee) payee = act.payee;
+      }
       s.transactions.push({
         id: newId("tx"),
         date: cand.date,
         accountId: acc.id,
-        payee: cand.payee || void 0,
+        payee,
         memo: cand.memo || void 0,
         status: "cleared",
+        flag,
         importId: cand.importId,
         postings: [posting]
       });
@@ -1022,6 +1119,75 @@ function saveImportProfile(app, profile) {
     if (i >= 0) s.importProfiles[i] = profile;
     else s.importProfiles.push(profile);
   });
+}
+function upsertRule(app, rule) {
+  return mutate(app, (s) => {
+    var _a;
+    const i = s.rules.findIndex((r) => r.id === rule.id);
+    if (i >= 0) s.rules[i] = rule;
+    else s.rules.push({ ...rule, order: (_a = rule.order) != null ? _a : s.rules.length });
+  });
+}
+function deleteRule(app, id2) {
+  return mutate(app, (s) => {
+    s.rules = s.rules.filter((r) => r.id !== id2);
+  });
+}
+function upsertScheduled(app, sched) {
+  return mutate(app, (s) => {
+    const i = s.scheduled.findIndex((x) => x.id === sched.id);
+    if (i >= 0) s.scheduled[i] = sched;
+    else s.scheduled.push(sched);
+  });
+}
+function deleteScheduled(app, id2) {
+  return mutate(app, (s) => {
+    s.scheduled = s.scheduled.filter((x) => x.id !== id2);
+  });
+}
+function enterScheduled(app, id2) {
+  return mutate(app, (s) => enterOne(s, id2));
+}
+function skipScheduled(app, id2) {
+  return mutate(app, (s) => {
+    const sch = s.scheduled.find((x) => x.id === id2);
+    if (sch) sch.nextDate = advance(sch.nextDate, sch.recurrence.freq, sch.recurrence.interval);
+  });
+}
+async function processAutoEnter(app) {
+  const today = todayISO();
+  let entered = 0;
+  await mutate(app, (s) => {
+    for (const sch of s.scheduled) {
+      if (!sch.autoEnter) continue;
+      let guard = 0;
+      while (sch.nextDate <= today && !isEnded(sch, sch.nextDate) && guard++ < 120) {
+        enterOne(s, sch.id);
+        entered++;
+      }
+    }
+  });
+  return entered;
+}
+function enterOne(s, id2) {
+  var _a;
+  const sch = s.scheduled.find((x) => x.id === id2);
+  if (!sch || isEnded(sch, sch.nextDate)) return;
+  const t = {
+    id: newId("tx"),
+    status: (_a = sch.template.status) != null ? _a : "uncleared",
+    ...sch.template,
+    date: sch.nextDate
+  };
+  const primary = t.postings[0];
+  if (primary && !primary.categoryId && !primary.transferAccountId) {
+    const amount = t.postings.reduce((sum, p) => sum + p.amount, 0);
+    const act = applyRules(s.rules, { payee: t.payee, memo: t.memo, accountId: t.accountId, amount });
+    if (act.categoryId) primary.categoryId = act.categoryId;
+    if (act.flag) t.flag = act.flag;
+  }
+  s.transactions.push(t);
+  sch.nextDate = advance(sch.nextDate, sch.recurrence.freq, sch.recurrence.interval);
 }
 
 // src/modals.ts
@@ -1227,6 +1393,8 @@ var TransactionModal = class extends BottomSheetModal {
     this.target = "";
     this.memo = "";
     this.cleared = true;
+    this.manualTarget = false;
+    this.snapshot = null;
   }
   renderBody(root) {
     scopeEl(root);
@@ -1236,7 +1404,7 @@ var TransactionModal = class extends BottomSheetModal {
   }
   async build(root) {
     var _a;
-    const s = await loadSnapshot(this.app);
+    const s = this.snapshot = await loadSnapshot(this.app);
     if (s.accounts.length === 0) {
       root.createDiv({ cls: "tr-muted", text: "Add an account first." });
       return;
@@ -1274,7 +1442,12 @@ var TransactionModal = class extends BottomSheetModal {
       t.inputEl.inputMode = "decimal";
       t.setPlaceholder((_a2 = spec(currency()).symbol) != null ? _a2 : "").setValue(this.amountText).onChange((v) => this.amountText = v);
     });
-    new import_obsidian5.Setting(root).setName("Payee").addText((t) => t.setValue(this.payee).setPlaceholder("Where the money went").onChange((v) => this.payee = v));
+    new import_obsidian5.Setting(root).setName("Payee").addText(
+      (t) => t.setValue(this.payee).setPlaceholder("Where the money went").onChange((v) => {
+        this.payee = v;
+        this.autosuggest();
+      })
+    );
     new import_obsidian5.Setting(root).setName("Category / transfer").addDropdown((d) => {
       d.addOption("", "\u2014 none \u2014");
       for (const c of [...s.categories].sort((a, b) => a.order - b.order)) {
@@ -1286,7 +1459,11 @@ var TransactionModal = class extends BottomSheetModal {
         d.addOption(`a:${a.id}`, `\u21C4 Transfer to ${a.name}`);
       }
       if (this.target) d.setValue(this.target);
-      d.onChange((v) => this.target = v);
+      this.catSelect = d.selectEl;
+      d.onChange((v) => {
+        this.target = v;
+        this.manualTarget = true;
+      });
     });
     new import_obsidian5.Setting(root).setName("Memo").addText((t) => t.setValue(this.memo).onChange((v) => this.memo = v));
     new import_obsidian5.Setting(root).setName("Date").addText((t) => {
@@ -1312,6 +1489,15 @@ var TransactionModal = class extends BottomSheetModal {
       this.target = p.transferAccountId ? `a:${p.transferAccountId}` : p.categoryId ? `c:${p.categoryId}` : "";
     }
   }
+  autosuggest() {
+    var _a;
+    if (this.manualTarget || this.editing || !this.snapshot) return;
+    const cat = (_a = applyRules(this.snapshot.rules, { payee: this.payee, accountId: this.accountId }).categoryId) != null ? _a : suggestCategoryFromHistory(this.snapshot.transactions, this.payee);
+    if (cat && this.catSelect) {
+      this.catSelect.value = `c:${cat}`;
+      this.target = `c:${cat}`;
+    }
+  }
   async save(currency) {
     var _a, _b;
     const minor = parseMoney(this.amountText, currency);
@@ -1320,13 +1506,22 @@ var TransactionModal = class extends BottomSheetModal {
       return;
     }
     const signed = this.direction === "out" ? -Math.abs(minor) : Math.abs(minor);
+    let payee = this.payee.trim() || void 0;
+    let flag;
+    if (!this.target && this.snapshot) {
+      const act = applyRules(this.snapshot.rules, { payee: this.payee, memo: this.memo, accountId: this.accountId, amount: signed });
+      if (act.categoryId) this.target = `c:${act.categoryId}`;
+      if (act.flag) flag = act.flag;
+      if (act.payee) payee = act.payee;
+    }
     const posting = this.target.startsWith("a:") ? { transferAccountId: this.target.slice(2), amount: signed } : this.target.startsWith("c:") ? { categoryId: this.target.slice(2), amount: signed } : { amount: signed };
     const base = {
       date: this.date,
       accountId: this.accountId,
-      payee: this.payee.trim() || void 0,
+      payee,
       memo: this.memo.trim() || void 0,
       status: this.cleared ? "cleared" : "uncleared",
+      flag,
       postings: [posting]
     };
     if (this.editing) await updateTransaction(this.app, this.editing.id, base);
@@ -1701,8 +1896,275 @@ var ImportModal = class extends BottomSheetModal {
   }
 };
 
-// src/conflicts.ts
+// src/rules-modal.ts
 var import_obsidian8 = require("obsidian");
+var RulesModal = class extends BottomSheetModal {
+  constructor(app, onDone) {
+    super(app);
+    this.onDone = onDone;
+  }
+  renderBody(root) {
+    scopeEl(root);
+    root.addClass("tr-rules");
+    this.titleEl.setText("Rules");
+    this.body = root.createDiv();
+    void this.refresh();
+  }
+  async refresh() {
+    this.snapshot = await loadSnapshot(this.app);
+    this.paint();
+    this.onDone();
+  }
+  paint() {
+    const c = this.body;
+    c.empty();
+    c.createEl("button", { cls: "tr-primary", text: "\uFF0B Rule" }).addEventListener(
+      "click",
+      () => new RuleEditModal(this.app, this.snapshot, null, () => void this.refresh()).open()
+    );
+    const catName = new Map(this.snapshot.categories.map((x) => [x.id, x.name]));
+    if (this.snapshot.rules.length === 0) {
+      c.createDiv({ cls: "tr-muted", text: "No rules yet. A rule auto-categorises matching transactions on entry and import." });
+      return;
+    }
+    for (const r of [...this.snapshot.rules].sort((a, b) => a.order - b.order)) {
+      const row = c.createDiv({ cls: "tr-rule-row" });
+      const left = row.createDiv();
+      left.createDiv({ cls: "tr-rule-when", text: describeMatch(r) });
+      left.createDiv({ cls: "tr-rule-then", text: "\u2192 " + describeAction(r, catName) });
+      const acts = row.createDiv({ cls: "tr-rule-actions" });
+      acts.createEl("button", { cls: "tr-btn", text: r.enabled ? "On" : "Off" }).addEventListener("click", () => void upsertRule(this.app, { ...r, enabled: !r.enabled }).then(() => this.refresh()));
+      acts.createEl("button", { cls: "tr-btn", text: "Edit" }).addEventListener("click", () => new RuleEditModal(this.app, this.snapshot, r, () => void this.refresh()).open());
+      acts.createEl("button", { cls: "tr-btn", text: "\u2715" }).addEventListener("click", () => void deleteRule(this.app, r.id).then(() => this.refresh()));
+    }
+  }
+};
+function describeMatch(r) {
+  const p = [];
+  if (r.match.payee) p.push(`payee ~ "${r.match.payee}"`);
+  if (r.match.memoContains) p.push(`memo ~ "${r.match.memoContains}"`);
+  if (r.match.account) p.push("account");
+  if (r.match.amount != null) p.push(`amount = ${toDecimalString(r.match.amount, "USD")}`);
+  return "If " + (p.join(" and ") || "\u2026");
+}
+function describeAction(r, catName) {
+  var _a;
+  const a = [];
+  if (r.action.categoryId) a.push(`categorise as ${(_a = catName.get(r.action.categoryId)) != null ? _a : "?"}`);
+  if (r.action.flag) a.push(`flag ${r.action.flag}`);
+  if (r.action.payee) a.push(`rename to "${r.action.payee}"`);
+  return a.join(", ") || "(no action)";
+}
+var RuleEditModal = class extends BottomSheetModal {
+  constructor(app, snapshot, existing, onDone) {
+    super(app);
+    this.snapshot = snapshot;
+    this.onDone = onDone;
+    this.draft = existing ? { ...existing, match: { ...existing.match }, action: { ...existing.action } } : { id: newId("rule"), order: snapshot.rules.length, enabled: true, match: {}, action: {} };
+  }
+  renderBody(root) {
+    scopeEl(root);
+    this.titleEl.setText("Rule");
+    root.createDiv({ cls: "tr-muted", text: "When these conditions match (all that are filled)\u2026" });
+    new import_obsidian8.Setting(root).setName("Payee contains").addText((t) => {
+      var _a;
+      return t.setValue((_a = this.draft.match.payee) != null ? _a : "").onChange((v) => this.draft.match.payee = v || void 0);
+    });
+    new import_obsidian8.Setting(root).setName("Memo contains").addText((t) => {
+      var _a;
+      return t.setValue((_a = this.draft.match.memoContains) != null ? _a : "").onChange((v) => this.draft.match.memoContains = v || void 0);
+    });
+    new import_obsidian8.Setting(root).setName("Account").addDropdown((d) => {
+      var _a;
+      d.addOption("", "\u2014 any \u2014");
+      for (const a of this.snapshot.accounts) d.addOption(a.id, a.name);
+      d.setValue((_a = this.draft.match.account) != null ? _a : "").onChange((v) => this.draft.match.account = v || void 0);
+    });
+    new import_obsidian8.Setting(root).setName("Amount equals").setDesc("Optional; signed (negative = outflow).").addText((t) => {
+      t.inputEl.inputMode = "decimal";
+      t.setValue(this.draft.match.amount != null ? toDecimalString(this.draft.match.amount, this.snapshot.baseCurrency) : "");
+      t.onChange((v) => {
+        var _a;
+        return this.draft.match.amount = v.trim() ? (_a = parseMoney(v, this.snapshot.baseCurrency)) != null ? _a : void 0 : void 0;
+      });
+    });
+    root.createDiv({ cls: "tr-muted", text: "\u2026do this:" });
+    new import_obsidian8.Setting(root).setName("Set category").addDropdown((d) => {
+      var _a;
+      d.addOption("", "\u2014 none \u2014");
+      for (const c of [...this.snapshot.categories].sort((a, b) => a.order - b.order)) if (c.kind !== "payment") d.addOption(c.id, c.name);
+      d.setValue((_a = this.draft.action.categoryId) != null ? _a : "").onChange((v) => this.draft.action.categoryId = v || void 0);
+    });
+    new import_obsidian8.Setting(root).setName("Set flag").addText((t) => {
+      var _a;
+      return t.setValue((_a = this.draft.action.flag) != null ? _a : "").onChange((v) => this.draft.action.flag = v || void 0);
+    });
+    new import_obsidian8.Setting(root).setName("Rename payee to").addText((t) => {
+      var _a;
+      return t.setValue((_a = this.draft.action.payee) != null ? _a : "").onChange((v) => this.draft.action.payee = v || void 0);
+    });
+    root.createEl("button", { cls: "tr-primary", text: "Save rule" }).addEventListener("click", () => void this.save());
+  }
+  async save() {
+    const m = this.draft.match;
+    if (!m.payee && !m.memoContains && !m.account && m.amount == null) {
+      new import_obsidian8.Notice("Add at least one condition.");
+      return;
+    }
+    await upsertRule(this.app, this.draft);
+    this.onDone();
+    this.close();
+  }
+};
+
+// src/scheduled-modal.ts
+var import_obsidian9 = require("obsidian");
+var FREQ = ["daily", "weekly", "monthly", "yearly"];
+var ScheduledModal = class extends BottomSheetModal {
+  constructor(app, onDone) {
+    super(app);
+    this.onDone = onDone;
+  }
+  renderBody(root) {
+    scopeEl(root);
+    root.addClass("tr-scheduled");
+    this.titleEl.setText("Scheduled");
+    this.body = root.createDiv();
+    void this.refresh();
+  }
+  async refresh() {
+    this.snapshot = await loadSnapshot(this.app);
+    this.paint();
+    this.onDone();
+  }
+  paint() {
+    const c = this.body;
+    c.empty();
+    c.createEl("button", { cls: "tr-primary", text: "\uFF0B Scheduled" }).addEventListener(
+      "click",
+      () => new ScheduledEditModal(this.app, this.snapshot, null, () => void this.refresh()).open()
+    );
+    if (this.snapshot.scheduled.length === 0) {
+      c.createDiv({ cls: "tr-muted", text: "No scheduled transactions. Add recurring bills and income to drive the upcoming view and forecast." });
+      return;
+    }
+    for (const sch of this.snapshot.scheduled) {
+      const amount = sch.template.postings.reduce((s, p) => s + p.amount, 0);
+      const row = c.createDiv({ cls: "tr-sched-row" });
+      const left = row.createDiv();
+      left.createDiv({ cls: "tr-sched-payee", text: sch.template.payee || "(scheduled)" });
+      left.createDiv({ cls: "tr-sched-sub", text: `${formatMoney(amount, this.snapshot.baseCurrency, { signed: true })} \xB7 every ${sch.recurrence.interval} ${sch.recurrence.freq} \xB7 next ${sch.nextDate}${sch.autoEnter ? " \xB7 auto" : ""}` });
+      const acts = row.createDiv({ cls: "tr-rule-actions" });
+      acts.createEl("button", { cls: "tr-btn", text: "Edit" }).addEventListener("click", () => new ScheduledEditModal(this.app, this.snapshot, sch, () => void this.refresh()).open());
+      acts.createEl("button", { cls: "tr-btn", text: "\u2715" }).addEventListener("click", () => void deleteScheduled(this.app, sch.id).then(() => this.refresh()));
+    }
+  }
+};
+var ScheduledEditModal = class extends BottomSheetModal {
+  constructor(app, snapshot, existing, onDone) {
+    var _a, _b;
+    super(app);
+    this.snapshot = snapshot;
+    this.existing = existing;
+    this.onDone = onDone;
+    this.amountText = "";
+    this.direction = "out";
+    this.payee = "";
+    this.target = "";
+    this.freq = "monthly";
+    this.interval = 1;
+    this.nextDate = todayISO();
+    this.autoEnter = false;
+    this.accountId = (_b = (_a = snapshot.accounts[0]) == null ? void 0 : _a.id) != null ? _b : "";
+    if (existing) this.prefill(existing);
+  }
+  prefill(sch) {
+    var _a;
+    this.accountId = sch.template.accountId;
+    this.payee = (_a = sch.template.payee) != null ? _a : "";
+    this.freq = sch.recurrence.freq;
+    this.interval = sch.recurrence.interval;
+    this.nextDate = sch.nextDate;
+    this.autoEnter = sch.autoEnter;
+    const p = sch.template.postings[0];
+    if (p) {
+      this.direction = p.amount < 0 ? "out" : "in";
+      this.amountText = String(Math.abs(p.amount) / 100);
+      this.target = p.transferAccountId ? `a:${p.transferAccountId}` : p.categoryId ? `c:${p.categoryId}` : "";
+    }
+  }
+  renderBody(root) {
+    scopeEl(root);
+    this.titleEl.setText("Scheduled transaction");
+    const s = this.snapshot;
+    new import_obsidian9.Setting(root).setName("Account").addDropdown((d) => {
+      for (const a of s.accounts) d.addOption(a.id, a.name);
+      d.setValue(this.accountId).onChange((v) => this.accountId = v);
+    });
+    const amt = root.createDiv({ cls: "tr-amount-row" });
+    const seg = amt.createDiv({ cls: "tr-seg" });
+    const out = seg.createEl("button", { cls: "tr-seg-btn" + (this.direction === "out" ? " is-on" : ""), text: "Outflow" });
+    const inn = seg.createEl("button", { cls: "tr-seg-btn" + (this.direction === "in" ? " is-on" : ""), text: "Inflow" });
+    out.addEventListener("click", () => {
+      this.direction = "out";
+      out.addClass("is-on");
+      inn.removeClass("is-on");
+    });
+    inn.addEventListener("click", () => {
+      this.direction = "in";
+      inn.addClass("is-on");
+      out.removeClass("is-on");
+    });
+    new import_obsidian9.Setting(amt).setName("Amount").addText((t) => {
+      t.inputEl.inputMode = "decimal";
+      t.setValue(this.amountText).onChange((v) => this.amountText = v);
+    });
+    new import_obsidian9.Setting(root).setName("Payee").addText((t) => t.setValue(this.payee).onChange((v) => this.payee = v));
+    new import_obsidian9.Setting(root).setName("Category / transfer").addDropdown((d) => {
+      d.addOption("", "\u2014 none \u2014");
+      for (const c of [...s.categories].sort((a, b) => a.order - b.order)) if (c.kind !== "payment") d.addOption(`c:${c.id}`, c.name);
+      for (const a of s.accounts) if (a.id !== this.accountId) d.addOption(`a:${a.id}`, `\u21C4 ${a.name}`);
+      d.setValue(this.target).onChange((v) => this.target = v);
+    });
+    new import_obsidian9.Setting(root).setName("Frequency").addDropdown((d) => {
+      for (const f of FREQ) d.addOption(f, f);
+      d.setValue(this.freq).onChange((v) => this.freq = v);
+    });
+    new import_obsidian9.Setting(root).setName("Every N").addText((t) => {
+      t.inputEl.type = "number";
+      t.setValue(String(this.interval)).onChange((v) => this.interval = Math.max(1, Number(v) || 1));
+    });
+    new import_obsidian9.Setting(root).setName("Next date").addText((t) => {
+      t.inputEl.type = "date";
+      t.setValue(this.nextDate).onChange((v) => this.nextDate = v || this.nextDate);
+    });
+    new import_obsidian9.Setting(root).setName("Auto-enter on due").setDesc("Otherwise it waits for approval in Upcoming.").addToggle((tg) => tg.setValue(this.autoEnter).onChange((v) => this.autoEnter = v));
+    root.createEl("button", { cls: "tr-primary", text: "Save" }).addEventListener("click", () => void this.save());
+  }
+  async save() {
+    var _a, _b;
+    const minor = parseMoney(this.amountText, this.snapshot.baseCurrency);
+    if (minor == null || minor === 0 || !this.accountId) {
+      new import_obsidian9.Notice("Pick an account and amount.");
+      return;
+    }
+    const signed = this.direction === "out" ? -Math.abs(minor) : Math.abs(minor);
+    const posting = this.target.startsWith("a:") ? { transferAccountId: this.target.slice(2), amount: signed } : this.target.startsWith("c:") ? { categoryId: this.target.slice(2), amount: signed } : { amount: signed };
+    const sched = {
+      id: (_b = (_a = this.existing) == null ? void 0 : _a.id) != null ? _b : newId("sch"),
+      template: { date: this.nextDate, accountId: this.accountId, payee: this.payee.trim() || void 0, status: "uncleared", postings: [posting] },
+      recurrence: { freq: this.freq, interval: this.interval },
+      nextDate: this.nextDate,
+      autoEnter: this.autoEnter
+    };
+    await upsertScheduled(this.app, sched);
+    this.onDone();
+    this.close();
+  }
+};
+
+// src/conflicts.ts
+var import_obsidian10 = require("obsidian");
 var ROOT3 = "Finances";
 function baseOf(path) {
   const m = path.match(/^(.*)\.sync-conflict-[^/]*(\.md)$/);
@@ -1723,9 +2185,9 @@ async function resolveConflicts(app) {
       report.configConflicts.push(file.path);
       continue;
     }
-    const baseAbstract = app.vault.getAbstractFileByPath((0, import_obsidian8.normalizePath)(basePath));
-    if (!(baseAbstract instanceof import_obsidian8.TFile)) {
-      await app.vault.rename(file, (0, import_obsidian8.normalizePath)(basePath)).catch(() => {
+    const baseAbstract = app.vault.getAbstractFileByPath((0, import_obsidian10.normalizePath)(basePath));
+    if (!(baseAbstract instanceof import_obsidian10.TFile)) {
+      await app.vault.rename(file, (0, import_obsidian10.normalizePath)(basePath)).catch(() => {
       });
       report.resolved++;
       continue;
@@ -1747,7 +2209,7 @@ async function resolveConflicts(app) {
 
 // src/view.ts
 var VIEW_TYPE_TREASURY = "treasury-view";
-var TreasuryView = class extends import_obsidian9.ItemView {
+var TreasuryView = class extends import_obsidian11.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -1783,7 +2245,8 @@ var TreasuryView = class extends import_obsidian9.ItemView {
     this.renderConflictBanner(root);
     this.renderTopbar(root);
     if (this.tab === "budget") this.renderBudget(root, s);
-    else this.renderAccounts(root, s);
+    else if (this.tab === "accounts") this.renderAccounts(root, s);
+    else this.renderUpcoming(root, s);
     this.renderQuickAdd(root);
   }
   // ------------------------------------------------------------- chrome
@@ -1791,7 +2254,7 @@ var TreasuryView = class extends import_obsidian9.ItemView {
     const bar = root.createDiv({ cls: "tr-topbar" });
     bar.createDiv({ cls: "tr-title", text: "TREASURY" });
     const tabs = bar.createDiv({ cls: "tr-tabs" });
-    for (const [id2, label] of [["budget", "Budget"], ["accounts", "Accounts"]]) {
+    for (const [id2, label] of [["budget", "Budget"], ["accounts", "Accounts"], ["upcoming", "Upcoming"]]) {
       const b = tabs.createEl("button", { cls: "tr-tab" + (this.tab === id2 ? " is-on" : ""), text: label });
       b.addEventListener("click", () => {
         this.tab = id2;
@@ -1808,7 +2271,7 @@ var TreasuryView = class extends import_obsidian9.ItemView {
       const r = await resolveConflicts(this.app);
       const extra = r.unresolved.length ? ` ${r.unresolved.reduce((n, u) => n + u.ids.length, 0)} record(s) need review.` : "";
       const cfg = r.configConflicts.length ? ` ${r.configConflicts.length} file(s) left for manual review.` : "";
-      new import_obsidian9.Notice(`Merged ${r.resolved} conflict file(s).${extra}${cfg}`);
+      new import_obsidian11.Notice(`Merged ${r.resolved} conflict file(s).${extra}${cfg}`);
       await this.render();
     });
   }
@@ -1822,7 +2285,7 @@ var TreasuryView = class extends import_obsidian9.ItemView {
     wrap.createDiv({ cls: "tr-muted", text: "Every dollar gets a job. Start with a small scaffold you can shape \u2014 accounts, categories, and transactions are all editable." });
     wrap.createEl("button", { cls: "tr-primary", text: "Create a starter budget" }).addEventListener("click", async () => {
       await saveSnapshot(this.app, starterBudget());
-      new import_obsidian9.Notice("Treasury initialised.");
+      new import_obsidian11.Notice("Treasury initialised.");
       await this.render();
     });
   }
@@ -1930,6 +2393,33 @@ var TreasuryView = class extends import_obsidian9.ItemView {
       () => new ImportModal(this.app, () => void this.render()).open()
     );
   }
+  // ------------------------------------------------------------ upcoming tab
+  renderUpcoming(root, s) {
+    var _a, _b, _c;
+    const actions = root.createDiv({ cls: "tr-acct-actions" });
+    actions.createEl("button", { cls: "tr-add-row", text: "\uFF0B Scheduled" }).addEventListener("click", () => new ScheduledModal(this.app, () => void this.render()).open());
+    actions.createEl("button", { cls: "tr-add-row", text: "\u2699 Rules" }).addEventListener("click", () => new RulesModal(this.app, () => void this.render()).open());
+    const today = todayISO();
+    const list = upcoming(s.scheduled, today, 45);
+    if (list.length === 0) {
+      root.createDiv({ cls: "tr-muted", text: "Nothing scheduled in the next 45 days. Add recurring bills and income, and set rules to auto-categorise them." });
+      return;
+    }
+    const catName = new Map(s.categories.map((c) => [c.id, c.name]));
+    const acctName = new Map(s.accounts.map((a) => [a.id, a.name]));
+    for (const u of list) {
+      const amount = u.scheduled.template.postings.reduce((sum, p2) => sum + p2.amount, 0);
+      const p = u.scheduled.template.postings[0];
+      const where = (p == null ? void 0 : p.transferAccountId) ? `\u21C4 ${(_a = acctName.get(p.transferAccountId)) != null ? _a : ""}` : (p == null ? void 0 : p.categoryId) ? (_b = catName.get(p.categoryId)) != null ? _b : "" : "";
+      const row = root.createDiv({ cls: "tr-sched-row" + (u.overdue ? " is-overdue" : "") });
+      const left = row.createDiv();
+      left.createDiv({ cls: "tr-sched-payee", text: (u.overdue ? "\u26A0 " : "") + (u.scheduled.template.payee || "(scheduled)") });
+      left.createDiv({ cls: "tr-sched-sub", text: `${u.date} \xB7 ${(_c = acctName.get(u.scheduled.template.accountId)) != null ? _c : ""} \xB7 ${where} \xB7 ${formatMoney(amount, s.baseCurrency, { signed: true })}` });
+      const acts = row.createDiv({ cls: "tr-rule-actions" });
+      acts.createEl("button", { cls: "tr-primary", text: "Enter" }).addEventListener("click", () => void enterScheduled(this.app, u.scheduled.id).then(() => this.render()));
+      acts.createEl("button", { cls: "tr-btn", text: "Skip" }).addEventListener("click", () => void skipScheduled(this.app, u.scheduled.id).then(() => this.render()));
+    }
+  }
   go(delta) {
     this.month = addMonths(this.month, delta);
     void this.render();
@@ -1941,7 +2431,7 @@ function monthLabel(month) {
 }
 
 // src/main.ts
-var TreasuryPlugin = class extends import_obsidian10.Plugin {
+var TreasuryPlugin = class extends import_obsidian12.Plugin {
   async onload() {
     this.registerView(VIEW_TYPE_TREASURY, (leaf) => new TreasuryView(leaf, this));
     applyUiStyles(this);
@@ -1966,15 +2456,33 @@ var TreasuryPlugin = class extends import_obsidian10.Plugin {
       name: "Resolve sync conflicts",
       callback: async () => {
         if (!hasConflicts(this.app)) {
-          new import_obsidian10.Notice("No sync conflicts.");
+          new import_obsidian12.Notice("No sync conflicts.");
           return;
         }
         const r = await resolveConflicts(this.app);
-        new import_obsidian10.Notice(`Merged ${r.resolved} conflict file(s).`);
+        new import_obsidian12.Notice(`Merged ${r.resolved} conflict file(s).`);
         this.refreshViews();
       }
     });
+    this.addCommand({
+      id: "manage-rules",
+      name: "Manage rules",
+      callback: () => new RulesModal(this.app, () => this.refreshViews()).open()
+    });
+    this.addCommand({
+      id: "manage-scheduled",
+      name: "Manage scheduled transactions",
+      callback: () => new ScheduledModal(this.app, () => this.refreshViews()).open()
+    });
     this.registerObsidianProtocolHandler("treasury", () => new TransactionModal(this.app, () => this.refreshViews()).open());
+    this.app.workspace.onLayoutReady(() => {
+      void processAutoEnter(this.app).then((n) => {
+        if (n > 0) {
+          new import_obsidian12.Notice(`Treasury: entered ${n} scheduled transaction${n === 1 ? "" : "s"}.`);
+          this.refreshViews();
+        }
+      });
+    });
   }
   /** Re-render any open Treasury view after a mutation from a command/URI. */
   refreshViews() {

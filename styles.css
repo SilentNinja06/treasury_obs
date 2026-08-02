@@ -88,3 +88,10 @@
 .tr-import .tr-primary, .tr-import .tr-btn { margin-top: 8px; }
 .tr-acct-actions { display: flex; gap: 8px; }
 .tr-acct-actions .tr-add-row { flex: 1; }
+/* rules + scheduled + upcoming */
+.tr-rule-row, .tr-sched-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 6px; border-bottom: 1px solid var(--background-modifier-border); }
+.tr-rule-when, .tr-sched-payee { font-size: 0.9rem; }
+.tr-rule-then, .tr-sched-sub { font-size: 0.72rem; color: var(--text-muted); }
+.tr-rule-actions { display: flex; gap: 4px; flex: none; }
+.tr-rule-actions .tr-btn, .tr-rule-actions .tr-primary { min-height: 30px; padding: 0 10px; }
+.tr-sched-row.is-overdue { background: color-mix(in srgb, var(--text-error) 8%, transparent); }
