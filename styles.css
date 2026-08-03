@@ -172,3 +172,5 @@
 .tr-txn-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 2px 8px; border-bottom: 1px solid var(--background-modifier-border); }
 .tr-txn-clear { flex: none; min-height: 28px; padding: 0 10px; }
 .tr-reg-row.is-uncleared { border-left: 2px solid var(--text-warning, #b9830a); padding-left: 6px; }
+/* credit-card payment: owed vs set-aside line under the category row */
+.tr-card-owed { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px 6px 8px; margin-top: -2px; font-size: 0.72rem; }
