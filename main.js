@@ -4001,11 +4001,11 @@ var TreasuryView = class extends import_obsidian16.ItemView {
       "click",
       () => new AddCategoryModal(this.app, s, () => void this.render()).open()
     );
-    budgetActions.createEl("button", { cls: "tr-add-row", text: "\u270E Edit categories" }).addEventListener(
+    budgetActions.createEl("button", { cls: "tr-add-row", text: "\u270E Categories" }).addEventListener(
       "click",
       () => new CategoriesModal(this.app, () => void this.render()).open()
     );
-    budgetActions.createEl("button", { cls: "tr-add-row", text: "\u{1F3AF} Targets" }).addEventListener(
+    budgetActions.createEl("button", { cls: "tr-add-row tr-add-row-wide", text: "\u{1F3AF} Targets" }).addEventListener(
       "click",
       () => new TargetsModal(this.app, () => void this.render()).open()
     );

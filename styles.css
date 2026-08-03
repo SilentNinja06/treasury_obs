@@ -40,8 +40,12 @@
 .tr-fab { position: fixed; right: 18px; bottom: 18px; z-index: 25; width: 52px; height: 52px; display: flex; align-items: center; justify-content: center; border-radius: 50%; border: none; background: var(--interactive-accent); color: var(--text-on-accent); font-size: 1.5rem; line-height: 1; cursor: pointer; box-shadow: 0 3px 12px rgba(0,0,0,0.35); }
 /* On mobile, clear Obsidian's bottom navigation bar and the home indicator. */
 .is-mobile .tr-fab { right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(58px + env(safe-area-inset-bottom, 0px)); }
-/* Keep the last rows reachable above the floating button. */
+/* Keep the last rows reachable above the floating button (and, on mobile, above
+ * Obsidian's bottom navigation bar + the home indicator). */
 .tr-root { padding-bottom: 88px; }
+.is-mobile .tr-root { padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+/* Targets gets its own full-width row so it never hides behind the FAB. */
+.tr-acct-actions .tr-add-row-wide { flex: 1 1 100%; }
 .tr-assign-btn { background: transparent; border: none; border-bottom: 1px dashed var(--background-modifier-border); color: var(--text-normal); cursor: pointer; font-variant-numeric: tabular-nums; font-size: 0.9rem; text-align: right; padding: 2px 2px; }
 .tr-assign-btn:hover { background: var(--background-modifier-hover); }
 .tr-c-name { cursor: pointer; }
