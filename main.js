@@ -353,11 +353,17 @@ function computeBudget(snapshot, throughMonth = monthOf(todayISO())) {
           applyTransfer(acct, other, p.amount, avail, (d) => rta += d);
           continue;
         }
-        if (!p.categoryId)
+        if (!p.categoryId) {
+          if (isOnBudget(acct) && acct.role !== "credit")
+            rta += p.amount;
           continue;
+        }
         const cat = categories.get(p.categoryId);
-        if (!cat)
+        if (!cat) {
+          if (isOnBudget(acct) && acct.role !== "credit")
+            rta += p.amount;
           continue;
+        }
         if (cat.kind === "income") {
           if (isOnBudget(acct))
             rta += p.amount;
@@ -1358,18 +1364,22 @@ function starterBudget(currency = "USD") {
   const s = emptySnapshot(currency, monthOf(todayISO()));
   const checking = id("acc");
   s.accounts = [{ id: checking, name: "Checking", role: "cash", currency }];
+  const gIncome = id("grp");
   const gBills = id("grp");
   const gEveryday = id("grp");
   s.groups = [
+    { id: gIncome, name: "Income", order: -1 },
     { id: gBills, name: "Bills", order: 0 },
     { id: gEveryday, name: "Everyday", order: 1 }
   ];
   s.categories = [
-    { id: id("cat"), groupId: gBills, name: "Rent / Mortgage", order: 0, kind: "spending" },
-    { id: id("cat"), groupId: gBills, name: "Utilities", order: 1, kind: "spending" },
-    { id: id("cat"), groupId: gEveryday, name: "Groceries", order: 2, kind: "spending" },
-    { id: id("cat"), groupId: gEveryday, name: "Dining Out", order: 3, kind: "spending" },
-    { id: id("cat"), groupId: gEveryday, name: "Transportation", order: 4, kind: "spending" }
+    // An income category is what routes a paycheck/deposit into Ready to Assign.
+    { id: id("cat"), groupId: gIncome, name: "Ready to Assign", order: 0, kind: "income" },
+    { id: id("cat"), groupId: gBills, name: "Rent / Mortgage", order: 1, kind: "spending" },
+    { id: id("cat"), groupId: gBills, name: "Utilities", order: 2, kind: "spending" },
+    { id: id("cat"), groupId: gEveryday, name: "Groceries", order: 3, kind: "spending" },
+    { id: id("cat"), groupId: gEveryday, name: "Dining Out", order: 4, kind: "spending" },
+    { id: id("cat"), groupId: gEveryday, name: "Transportation", order: 5, kind: "spending" }
   ];
   return s;
 }
@@ -2543,6 +2553,10 @@ var TransactionModal = class extends BottomSheetModal {
       if (act.categoryId) this.target = `c:${act.categoryId}`;
       if (act.flag) flag = act.flag;
       if (act.payee) payee = act.payee;
+    }
+    if (!this.target && this.direction === "in" && this.snapshot) {
+      const inc = this.snapshot.categories.find((c) => c.kind === "income" && !c.archived);
+      if (inc) this.target = `c:${inc.id}`;
     }
     const posting = this.target.startsWith("a:") ? this.transferCategory ? { transferAccountId: this.target.slice(2), categoryId: this.transferCategory, amount: signed } : { transferAccountId: this.target.slice(2), amount: signed } : this.target.startsWith("c:") ? { categoryId: this.target.slice(2), amount: signed } : { amount: signed };
     const base = {
