@@ -26,6 +26,10 @@
 .tr-avail.is-pos { color: var(--color-green, #3a7a3a); }
 .tr-avail.is-neg { color: var(--text-error); font-weight: 600; }
 .tr-group { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; padding: 6px 8px 4px; border-bottom: 1px solid var(--background-modifier-border); }
+.tr-group-toggle { cursor: pointer; gap: 6px; }
+.tr-group-toggle:hover { background: var(--background-modifier-hover); }
+.tr-group-caret { font-size: 0.6rem; color: var(--text-muted); flex: none; width: 12px; }
+.tr-group-toggle .tr-group-name { flex: 1; }
 .tr-group-name { font-family: var(--dash-font-mono, monospace); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-normal); }
 .tr-group-total { font-variant-numeric: tabular-nums; font-size: 0.82rem; color: var(--text-muted); }
 .tr-foot { margin-top: 16px; font-style: italic; }
@@ -44,7 +48,7 @@
 .is-mobile .tr-fab { right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(58px + env(safe-area-inset-bottom, 0px)); }
 /* Keep the last rows reachable above the floating button (and, on mobile, above
  * Obsidian's bottom navigation bar + the home indicator). */
-.tr-root { padding-bottom: 88px; }
+.tr-root { padding-bottom: 24px; }
 .is-mobile .tr-root { padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
 /* Targets gets its own full-width row so it never hides behind the FAB. */
 .tr-acct-actions .tr-add-row-wide { flex: 1 1 100%; }

@@ -3925,6 +3925,9 @@ var TreasuryView = class extends import_obsidian17.ItemView {
     return "wallet";
   }
   async onOpen() {
+    if (!import_obsidian17.Platform.isMobile) {
+      this.addAction("plus", "Add transaction", () => new TransactionModal(this.app, () => void this.render()).open());
+    }
     this.registerDomEvent(window, "online", () => void this.render());
     this.registerDomEvent(window, "offline", () => void this.render());
     await this.render();
@@ -4003,6 +4006,7 @@ var TreasuryView = class extends import_obsidian17.ItemView {
     });
   }
   renderQuickAdd(root) {
+    if (!import_obsidian17.Platform.isMobile) return;
     const fab = root.createEl("button", { cls: "tr-fab", text: "\uFF0B", attr: { "aria-label": "Add transaction" } });
     fab.addEventListener("click", () => new TransactionModal(this.app, () => void this.render()).open());
   }
@@ -4065,16 +4069,21 @@ var TreasuryView = class extends import_obsidian17.ItemView {
       if (c.kind === "income" || c.archived) continue;
       ((_b = catsByGroup.get(c.groupId)) != null ? _b : catsByGroup.set(c.groupId, []).get(c.groupId)).push(c);
     }
+    const collapsed = new Set(this.plugin.settings.collapsedGroups);
     for (const g of groups) {
       const cats = (_c = catsByGroup.get(g.id)) != null ? _c : [];
       if (cats.length === 0) continue;
+      const isCollapsed = collapsed.has(g.id);
       const gAvail = cats.reduce((sum, c) => {
         var _a2, _b2;
         return sum + ((_b2 = (_a2 = view == null ? void 0 : view.categories[c.id]) == null ? void 0 : _a2.available) != null ? _b2 : 0);
       }, 0);
-      const gh = root.createDiv({ cls: "tr-group" });
+      const gh = root.createDiv({ cls: "tr-group tr-group-toggle" + (isCollapsed ? " is-collapsed" : "") });
+      gh.createSpan({ cls: "tr-group-caret", text: isCollapsed ? "\u25B8" : "\u25BE" });
       gh.createSpan({ cls: "tr-group-name", text: g.name });
       gh.createSpan({ cls: "tr-group-total", text: formatMoney(gAvail, s.baseCurrency) });
+      gh.addEventListener("click", () => void this.toggleGroup(g.id));
+      if (isCollapsed) continue;
       for (const c of cats) {
         const cm = (_d = view == null ? void 0 : view.categories[c.id]) != null ? _d : { assigned: 0, activity: 0, available: 0 };
         const isPayment = c.kind === "payment" && !!c.creditAccountId;
@@ -4138,6 +4147,14 @@ var TreasuryView = class extends import_obsidian17.ItemView {
   }
   moveMoney(fromCat, s) {
     new MoveMoneyModal(this.app, this.month, fromCat, s, () => void this.render()).open();
+  }
+  /** Collapse/expand a category group on the budget screen; persisted per device. */
+  async toggleGroup(groupId) {
+    const set = new Set(this.plugin.settings.collapsedGroups);
+    set.has(groupId) ? set.delete(groupId) : set.add(groupId);
+    this.plugin.settings.collapsedGroups = [...set];
+    await this.plugin.saveSettings();
+    await this.render();
   }
   // ------------------------------------------------------------ accounts tab
   renderAccounts(root, s) {
@@ -4330,7 +4347,8 @@ var import_obsidian18 = require("obsidian");
 var DEFAULT_SETTINGS = {
   discreetMode: false,
   autoEnterOnLoad: true,
-  onboardingCurrency: "USD"
+  onboardingCurrency: "USD",
+  collapsedGroups: []
 };
 var TreasurySettingTab = class extends import_obsidian18.PluginSettingTab {
   constructor(app, plugin) {
