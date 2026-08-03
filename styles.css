@@ -155,3 +155,8 @@
 .tr-cat-add { display: flex; gap: 8px; margin-top: 14px; }
 .tr-cat-add .tr-primary, .tr-cat-add .tr-btn { flex: 1; }
 .tr-cat-danger { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--background-modifier-border); }
+/* archived accounts disclosure */
+.tr-archived { margin-top: 14px; }
+.tr-archived > summary { cursor: pointer; font-family: var(--dash-font-mono, monospace); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); padding: 6px 4px; list-style: revert; }
+.tr-acct-row.is-archived { opacity: 0.75; }
+.tr-acct-row.is-archived .tr-acct-name { text-decoration: line-through; text-decoration-color: var(--text-faint); }
