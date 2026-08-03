@@ -4329,7 +4329,19 @@ var TreasuryView = class extends import_obsidian17.ItemView {
       left.createDiv({ cls: "tr-reg-sub", text: `${t.date} \xB7 ${(_c = acctName.get(t.accountId)) != null ? _c : "?"}${where ? " \xB7 " + where : ""}` });
       const right = row.createDiv({ cls: "tr-reg-right" });
       right.createDiv({ cls: "tr-reg-amt " + (amount < 0 ? "is-neg" : "is-pos"), text: formatMoney(amount, s.baseCurrency, { signed: true }) });
-      if (t.status === "uncleared") right.createDiv({ cls: "tr-muted tr-reg-run", text: "uncleared" });
+      if (t.status === "uncleared") {
+        const btn = right.createEl("button", { cls: "tr-clear-btn", text: "Clear" });
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          void updateTransaction(this.app, t.id, { status: "cleared" }).then(() => this.render());
+        });
+      } else if (t.status === "cleared") {
+        const chip = right.createEl("button", { cls: "tr-clear-btn is-cleared", text: "\u2713 cleared" });
+        chip.addEventListener("click", (e) => {
+          e.stopPropagation();
+          void updateTransaction(this.app, t.id, { status: "uncleared" }).then(() => this.render());
+        });
+      }
     }
   }
   go(delta) {
