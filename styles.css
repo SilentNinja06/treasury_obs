@@ -37,7 +37,11 @@
 .tr-btn { min-height: 32px; padding: 0 12px; border: 1px solid var(--background-modifier-border); border-radius: 6px; background: var(--background-secondary); color: var(--text-normal); cursor: pointer; font-size: 0.72rem; }
 .tr-btn:hover { background: var(--background-modifier-hover); }
 .tr-danger { min-height: 44px; padding: 0 14px; border: 1px solid var(--text-error); border-radius: 6px; background: transparent; color: var(--text-error); cursor: pointer; font-family: var(--font-monospace); font-size: 0.72rem; text-transform: uppercase; }
-.tr-fab { position: sticky; bottom: 16px; float: right; margin-top: 12px; width: 52px; height: 52px; border-radius: 50%; border: none; background: var(--interactive-accent); color: var(--text-on-accent); font-size: 1.5rem; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,0.3); }
+.tr-fab { position: fixed; right: 18px; bottom: 18px; z-index: 25; width: 52px; height: 52px; display: flex; align-items: center; justify-content: center; border-radius: 50%; border: none; background: var(--interactive-accent); color: var(--text-on-accent); font-size: 1.5rem; line-height: 1; cursor: pointer; box-shadow: 0 3px 12px rgba(0,0,0,0.35); }
+/* On mobile, clear Obsidian's bottom navigation bar and the home indicator. */
+.is-mobile .tr-fab { right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(58px + env(safe-area-inset-bottom, 0px)); }
+/* Keep the last rows reachable above the floating button. */
+.tr-root { padding-bottom: 88px; }
 .tr-assign-btn { background: transparent; border: none; border-bottom: 1px dashed var(--background-modifier-border); color: var(--text-normal); cursor: pointer; font-variant-numeric: tabular-nums; font-size: 0.9rem; text-align: right; padding: 2px 2px; }
 .tr-assign-btn:hover { background: var(--background-modifier-hover); }
 .tr-c-name { cursor: pointer; }

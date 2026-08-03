@@ -42,6 +42,7 @@ var BottomSheetModal = class extends import_obsidian.Modal {
     super(app);
     this.vv = null;
     this.vvHandler = null;
+    this.focusHandler = null;
   }
   onOpen() {
     this.modalEl.addClass(cls("sheet"));
@@ -57,30 +58,47 @@ var BottomSheetModal = class extends import_obsidian.Modal {
    * Keep a bottom-anchored sheet above the on-screen keyboard. When a field is
    * focused on mobile, the keyboard shrinks the visual viewport; without this
    * the sheet sits *behind* the keyboard and is unusable (iOS especially). We
-   * lift the sheet by the keyboard's height so its contents stay visible. The
-   * sheet's own body scrolls (see components.css), so tall content is reachable.
+   * (1) lift the sheet by the keyboard's height, (2) cap its height to the
+   * visible viewport so it can never extend behind the keyboard, and (3) scroll
+   * the focused field into view within the sheet's own scroll. Focusing a field
+   * while the keyboard is already up fires no viewport resize, so we also react
+   * to `focusin` directly.
    */
   trackKeyboard() {
     const vv = window.visualViewport;
     if (!vv)
       return;
     this.vv = vv;
-    this.vvHandler = () => {
+    const apply = (scrollToActive) => {
       const keyboard = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
       this.modalEl.style.bottom = `${keyboard}px`;
+      this.modalEl.style.maxHeight = `${Math.max(160, vv.height - 8)}px`;
+      if (scrollToActive) {
+        const active = document.activeElement;
+        if (active && this.modalEl.contains(active)) {
+          window.setTimeout(() => active.scrollIntoView({ block: "center", behavior: "auto" }), 0);
+        }
+      }
     };
+    this.vvHandler = () => apply(true);
     vv.addEventListener("resize", this.vvHandler);
     vv.addEventListener("scroll", this.vvHandler);
-    this.vvHandler();
+    this.focusHandler = () => apply(true);
+    this.modalEl.addEventListener("focusin", this.focusHandler);
+    apply(false);
   }
   onClose() {
     if (this.vv && this.vvHandler) {
       this.vv.removeEventListener("resize", this.vvHandler);
       this.vv.removeEventListener("scroll", this.vvHandler);
     }
+    if (this.focusHandler)
+      this.modalEl.removeEventListener("focusin", this.focusHandler);
     this.vv = null;
     this.vvHandler = null;
+    this.focusHandler = null;
     this.modalEl.style.removeProperty("bottom");
+    this.modalEl.style.removeProperty("max-height");
     this.contentEl.empty();
   }
 };
