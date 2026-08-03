@@ -30,7 +30,9 @@
 .tr-group-total { font-variant-numeric: tabular-nums; font-size: 0.82rem; color: var(--text-muted); }
 .tr-foot { margin-top: 16px; font-style: italic; }
 /* interactive chunk */
-.tr-tabs { display: flex; gap: 4px; }
+.tr-tabs { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.tr-tabs::-webkit-scrollbar { display: none; }
+.tr-tab { flex: 0 0 auto; white-space: nowrap; }
 .tr-tab { min-height: 32px; padding: 0 12px; border: 1px solid var(--background-modifier-border); border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; font-family: var(--dash-font-mono, monospace); font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase; }
 .tr-tab.is-on { background: var(--interactive-accent); color: var(--text-on-accent); border-color: transparent; }
 .tr-conflict { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; margin-bottom: 10px; border: 1px solid var(--text-error); border-radius: 8px; background: color-mix(in srgb, var(--text-error) 12%, transparent); font-size: 0.82rem; }
@@ -164,3 +166,9 @@
 .tr-archived > summary { cursor: pointer; font-family: var(--dash-font-mono, monospace); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); padding: 6px 4px; list-style: revert; }
 .tr-acct-row.is-archived { opacity: 0.75; }
 .tr-acct-row.is-archived .tr-acct-name { text-decoration: line-through; text-decoration-color: var(--text-faint); }
+/* transactions tab */
+.tr-txn-filters { display: flex; flex-direction: column; gap: 0; margin-bottom: 6px; }
+.tr-txn-filters .setting-item { border: none; padding: 6px 0; }
+.tr-txn-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 2px 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.tr-txn-clear { flex: none; min-height: 28px; padding: 0 10px; }
+.tr-reg-row.is-uncleared { border-left: 2px solid var(--text-warning, #b9830a); padding-left: 6px; }

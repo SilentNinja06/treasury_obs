@@ -3815,6 +3815,10 @@ var TreasuryView = class extends import_obsidian16.ItemView {
     this.snapshot = null;
     /** Session-only override to reveal amounts while discreet mode is on. */
     this.revealed = false;
+    /** Transactions-tab filters. "" = all. */
+    this.txnAccount = "";
+    this.txnCategory = "";
+    this.txnUnclearedOnly = false;
   }
   getViewType() {
     return VIEW_TYPE_TREASURY;
@@ -3849,15 +3853,15 @@ var TreasuryView = class extends import_obsidian16.ItemView {
     this.renderStatusStrip(root, s);
     if (this.tab === "budget") this.renderBudget(root, s);
     else if (this.tab === "accounts") this.renderAccounts(root, s);
+    else if (this.tab === "transactions") this.renderTransactions(root, s);
     else this.renderUpcoming(root, s);
     this.renderQuickAdd(root);
   }
   // ------------------------------------------------------------- chrome
   renderTopbar(root) {
     const bar = root.createDiv({ cls: "tr-topbar" });
-    bar.createDiv({ cls: "tr-title", text: "TREASURY" });
     const tabs = bar.createDiv({ cls: "tr-tabs" });
-    for (const [id2, label] of [["budget", "Budget"], ["accounts", "Accounts"], ["upcoming", "Upcoming"]]) {
+    for (const [id2, label] of [["budget", "Budget"], ["accounts", "Accounts"], ["transactions", "Transactions"], ["upcoming", "Upcoming"]]) {
       const b = tabs.createEl("button", { cls: "tr-tab" + (this.tab === id2 ? " is-on" : ""), text: label });
       b.addEventListener("click", () => {
         this.tab = id2;
@@ -3980,7 +3984,7 @@ var TreasuryView = class extends import_obsidian16.ItemView {
         const cm = (_d = view == null ? void 0 : view.categories[c.id]) != null ? _d : { assigned: 0, activity: 0, available: 0 };
         const row = root.createDiv({ cls: "tr-row" });
         const name = row.createSpan({ cls: "tr-c-name", text: c.name });
-        name.addEventListener("click", () => this.moveMoney(c.id, s));
+        name.addEventListener("click", () => this.showTransactions({ category: c.id }));
         const assigned = row.createEl("button", { cls: "tr-c-num tr-assign-btn", text: formatMoney(cm.assigned, s.baseCurrency) });
         assigned.addEventListener("click", () => this.assign(c.id, c.name, cm.available, cm.assigned, s.baseCurrency));
         row.createSpan({ cls: "tr-c-num tr-activity", text: formatMoney(cm.activity, s.baseCurrency) });
@@ -4118,6 +4122,88 @@ var TreasuryView = class extends import_obsidian16.ItemView {
       const acts = row.createDiv({ cls: "tr-rule-actions" });
       acts.createEl("button", { cls: "tr-primary", text: "Enter" }).addEventListener("click", () => void enterScheduled(this.app, u.scheduled.id).then(() => this.render()));
       acts.createEl("button", { cls: "tr-btn", text: "Skip" }).addEventListener("click", () => void skipScheduled(this.app, u.scheduled.id).then(() => this.render()));
+    }
+  }
+  // ------------------------------------------------------- transactions tab
+  /** Jump to the Transactions tab with a preset filter (from a category tap). */
+  showTransactions(filter) {
+    var _a, _b;
+    this.txnAccount = (_a = filter.account) != null ? _a : "";
+    this.txnCategory = (_b = filter.category) != null ? _b : "";
+    this.txnUnclearedOnly = false;
+    this.tab = "transactions";
+    void this.render();
+  }
+  /**
+   * A flat, filterable ledger of every transaction (§4.3) — the place to spot an
+   * uncleared or mis-entered one and fix it. Filter by account, by category, or
+   * to just the uncleared. Tap any row to edit it.
+   */
+  renderTransactions(root, s) {
+    var _a, _b, _c;
+    const catName = new Map(s.categories.map((c) => [c.id, c.name]));
+    const acctName = new Map(s.accounts.map((a) => [a.id, a.name]));
+    const filters = root.createDiv({ cls: "tr-txn-filters" });
+    new import_obsidian16.Setting(filters).setName("Account").addDropdown((d) => {
+      d.addOption("", "All accounts");
+      for (const a of s.accounts) d.addOption(a.id, a.name + (a.closed ? " (archived)" : ""));
+      d.setValue(this.txnAccount).onChange((v) => {
+        this.txnAccount = v;
+        void this.render();
+      });
+    });
+    new import_obsidian16.Setting(filters).setName("Category").addDropdown((d) => {
+      d.addOption("", "All categories");
+      for (const c of [...s.categories].sort((a, b) => a.order - b.order)) if (!c.archived) d.addOption(c.id, c.name);
+      d.setValue(this.txnCategory).onChange((v) => {
+        this.txnCategory = v;
+        void this.render();
+      });
+    });
+    new import_obsidian16.Setting(filters).setName("Uncleared only").addToggle(
+      (t) => t.setValue(this.txnUnclearedOnly).onChange((v) => {
+        this.txnUnclearedOnly = v;
+        void this.render();
+      })
+    );
+    const rows = s.transactions.filter((t) => {
+      if (this.txnUnclearedOnly && t.status !== "uncleared") return false;
+      if (this.txnAccount) {
+        const onAccount = t.accountId === this.txnAccount || t.postings.some((p) => p.transferAccountId === this.txnAccount);
+        if (!onAccount) return false;
+      }
+      if (this.txnCategory && !t.postings.some((p) => p.categoryId === this.txnCategory)) return false;
+      return true;
+    }).sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
+    const unclearedCount = rows.filter((t) => t.status === "uncleared").length;
+    const summary = root.createDiv({ cls: "tr-txn-summary" });
+    const activeFilter = this.txnCategory ? catName.get(this.txnCategory) : this.txnAccount ? acctName.get(this.txnAccount) : null;
+    summary.createSpan({ cls: "tr-muted", text: `${rows.length} transaction${rows.length === 1 ? "" : "s"}${activeFilter ? ` \xB7 ${activeFilter}` : ""}${unclearedCount ? ` \xB7 ${unclearedCount} uncleared` : ""}` });
+    if (this.txnAccount || this.txnCategory || this.txnUnclearedOnly) {
+      summary.createEl("button", { cls: "tr-btn tr-txn-clear", text: "Clear filters" }).addEventListener("click", () => {
+        this.txnAccount = this.txnCategory = "";
+        this.txnUnclearedOnly = false;
+        void this.render();
+      });
+    }
+    if (rows.length === 0) {
+      root.createDiv({ cls: "tr-muted", text: "No transactions match. Add one with \uFF0B, or import from a bank export." });
+      return;
+    }
+    const list = root.createDiv({ cls: "tr-reg-list" });
+    for (const t of rows) {
+      const amount = t.postings.reduce((sum, p2) => sum + p2.amount, 0);
+      const p = t.postings[0];
+      const where = (p == null ? void 0 : p.transferAccountId) ? `\u21C4 ${(_a = acctName.get(p.transferAccountId)) != null ? _a : "?"}` : t.postings.length > 1 ? "Split" : (p == null ? void 0 : p.categoryId) ? (_b = catName.get(p.categoryId)) != null ? _b : "" : "";
+      const row = list.createDiv({ cls: "tr-reg-row" + (t.status === "uncleared" ? " is-uncleared" : "") });
+      row.addEventListener("click", () => new TransactionModal(this.app, () => void this.render(), t, t.accountId).open());
+      const left = row.createDiv({ cls: "tr-reg-left" });
+      const mark = t.status === "reconciled" ? "\u{1F512} " : t.status === "uncleared" ? "\u2022 " : "";
+      left.createDiv({ cls: "tr-reg-payee", text: mark + (t.payee || where || "\u2014") });
+      left.createDiv({ cls: "tr-reg-sub", text: `${t.date} \xB7 ${(_c = acctName.get(t.accountId)) != null ? _c : "?"}${where ? " \xB7 " + where : ""}` });
+      const right = row.createDiv({ cls: "tr-reg-right" });
+      right.createDiv({ cls: "tr-reg-amt " + (amount < 0 ? "is-neg" : "is-pos"), text: formatMoney(amount, s.baseCurrency, { signed: true }) });
+      if (t.status === "uncleared") right.createDiv({ cls: "tr-muted tr-reg-run", text: "uncleared" });
     }
   }
   go(delta) {
