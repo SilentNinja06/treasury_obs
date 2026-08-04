@@ -205,6 +205,35 @@ function parseMoney(text, code) {
   const m = Math.round(value * unit(code));
   return neg ? -m : m;
 }
+function evalMoneyExpression(text, code, base = 0) {
+  const t = text.trim();
+  if (t === "")
+    return null;
+  const startsWithOp = t[0] === "+" || t[0] === "-";
+  const parts = t.match(/[+-]?[^+-]+/g);
+  if (!parts)
+    return null;
+  let total = startsWithOp ? base : 0;
+  for (let i = 0; i < parts.length; i++) {
+    const raw = parts[i].trim();
+    let sign = 1;
+    let body = raw;
+    if (raw[0] === "+")
+      body = raw.slice(1);
+    else if (raw[0] === "-") {
+      sign = -1;
+      body = raw.slice(1);
+    }
+    const m = parseMoney(body.trim(), code);
+    if (m == null)
+      return null;
+    if (i === 0 && !startsWithOp)
+      total = m;
+    else
+      total += sign * Math.abs(m);
+  }
+  return total;
+}
 function toDecimalString(m, code) {
   const sc = spec(code).scale;
   const negative = m < 0;
@@ -2338,6 +2367,7 @@ var AmountPromptModal = class extends BottomSheetModal {
     this.currency = currency;
     this.onSubmit = onSubmit;
     this.hint = hint;
+    this.base = initialMinor;
     this.text = initialMinor ? toDecimalString(initialMinor, currency) : "";
   }
   renderBody(root) {
@@ -2347,8 +2377,10 @@ var AmountPromptModal = class extends BottomSheetModal {
     let input;
     new import_obsidian8.Setting(root).setName("Amount").addText((t) => {
       input = t.inputEl;
-      t.inputEl.inputMode = "decimal";
-      t.setValue(this.text).onChange((v) => this.text = v);
+      t.setValue(this.text).onChange((v) => {
+        this.text = v;
+        this.updateLive();
+      });
       t.inputEl.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
           e.preventDefault();
@@ -2356,15 +2388,23 @@ var AmountPromptModal = class extends BottomSheetModal {
         }
       });
     });
+    this.live = root.createDiv({ cls: "tr-muted tr-amount-live" });
+    this.updateLive();
     const row = root.createDiv({ cls: "tr-txn-buttons" });
     row.createEl("button", { cls: "tr-primary", text: "Set" }).addEventListener("click", () => void this.submit());
     row.createEl("button", { cls: "tr-btn", text: "Clear" }).addEventListener("click", () => void Promise.resolve(this.onSubmit(0)).then(() => this.close()));
     setTimeout(() => input == null ? void 0 : input.focus(), 30);
   }
+  updateLive() {
+    if (!this.live) return;
+    const isExpr = /[+\-]/.test(this.text.trim().slice(1)) || /^[+\-]/.test(this.text.trim());
+    const v = evalMoneyExpression(this.text, this.currency, this.base);
+    this.live.setText(isExpr && v != null ? `= ${formatMoney(v, this.currency)}` : "Tip: type +20 or -10 to adjust");
+  }
   async submit() {
-    const minor = parseMoney(this.text, this.currency);
+    const minor = evalMoneyExpression(this.text, this.currency, this.base);
     if (minor == null) {
-      new import_obsidian8.Notice("Enter an amount.");
+      new import_obsidian8.Notice("Enter an amount (e.g. 50, +20, or -10).");
       return;
     }
     await this.onSubmit(minor);

@@ -180,3 +180,5 @@
 .tr-clear-btn.is-cleared { border-color: var(--color-green, #3a7a3a); color: var(--color-green, #3a7a3a); }
 /* credit-card payment: owed vs set-aside line under the category row */
 .tr-card-owed { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px 6px 8px; margin-top: -2px; font-size: 0.72rem; }
+
+.tr-amount-live { margin-top: 6px; font-variant-numeric: tabular-nums; }
