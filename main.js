@@ -234,6 +234,26 @@ function evalMoneyExpression(text, code, base = 0) {
   }
   return total;
 }
+function computeTip(base, tipText, code) {
+  const t = tipText.trim();
+  if (t === "")
+    return 0;
+  const sign = base < 0 ? -1 : 1;
+  const mag = Math.abs(base);
+  if (t.endsWith("%")) {
+    const pctStr = t.slice(0, -1).trim().replace(/,/g, "");
+    if (pctStr === "" || !/^[0-9]*\.?[0-9]+$/.test(pctStr))
+      return null;
+    const pct = Number(pctStr);
+    if (!Number.isFinite(pct))
+      return null;
+    return sign * Math.round(mag * pct / 100);
+  }
+  const m = parseMoney(t, code);
+  if (m == null)
+    return null;
+  return sign * Math.abs(m);
+}
 function toDecimalString(m, code) {
   const sc = spec(code).scale;
   const negative = m < 0;
@@ -2567,6 +2587,9 @@ var TransactionModal = class extends BottomSheetModal {
     this.date = todayISO();
     this.payee = "";
     this.amountText = "";
+    /** Optional tip entered as a percent ("20%") or a flat amount ("5.00"); folded
+     * into the total at save so a restaurant bill posts complete, no after-edit. */
+    this.tipText = "";
     this.direction = "out";
     /** Encoded target: "c:<categoryId>" or "a:<transferAccountId>". */
     this.target = "";
@@ -2608,6 +2631,8 @@ var TransactionModal = class extends BottomSheetModal {
     const seg = amt.createDiv({ cls: "tr-seg" });
     const outBtn = seg.createEl("button", { cls: "tr-seg-btn" + (this.direction === "out" ? " is-on" : ""), text: "Outflow" });
     const inBtn = seg.createEl("button", { cls: "tr-seg-btn" + (this.direction === "in" ? " is-on" : ""), text: "Inflow" });
+    let refreshTotal = () => {
+    };
     outBtn.addEventListener("click", () => {
       this.direction = "out";
       outBtn.addClass("is-on");
@@ -2621,8 +2646,40 @@ var TransactionModal = class extends BottomSheetModal {
     new import_obsidian9.Setting(amt).setName("Amount").addText((t) => {
       var _a2;
       t.inputEl.inputMode = "decimal";
-      t.setPlaceholder((_a2 = spec(currency()).symbol) != null ? _a2 : "").setValue(this.amountText).onChange((v) => this.amountText = v);
+      t.setPlaceholder((_a2 = spec(currency()).symbol) != null ? _a2 : "").setValue(this.amountText).onChange((v) => {
+        this.amountText = v;
+        refreshTotal();
+      });
     });
+    new import_obsidian9.Setting(root).setName("Tip").setDesc("Optional \u2014 a percent (20%) or an amount (5.00), added to the bill.").addText((t) => {
+      t.inputEl.inputMode = "text";
+      t.setPlaceholder("20% or 5.00").setValue(this.tipText).onChange((v) => {
+        this.tipText = v;
+        refreshTotal();
+      });
+    });
+    const totalPreview = root.createDiv({ cls: "tr-tip-total tr-muted" });
+    refreshTotal = () => {
+      const cur = currency();
+      const base = parseMoney(this.amountText, cur);
+      if (base == null || base === 0) {
+        totalPreview.setText("");
+        return;
+      }
+      const mag = Math.abs(base);
+      const tip = computeTip(mag, this.tipText, cur);
+      if (this.tipText.trim() && tip == null) {
+        totalPreview.setText("Tip not understood \u2014 use e.g. 20% or 5.00");
+        return;
+      }
+      const tipM = tip != null ? tip : 0;
+      if (tipM === 0) {
+        totalPreview.setText("");
+        return;
+      }
+      totalPreview.setText(`${formatMoney(mag, cur)} bill + ${formatMoney(tipM, cur)} tip = ${formatMoney(mag + tipM, cur)}`);
+    };
+    refreshTotal();
     new import_obsidian9.Setting(root).setName("Payee").addText(
       (t) => t.setValue(this.payee).setPlaceholder("Where the money went").onChange((v) => {
         this.payee = v;
@@ -2715,7 +2772,20 @@ var TransactionModal = class extends BottomSheetModal {
       new import_obsidian9.Notice("Enter an amount.");
       return;
     }
-    const signed = this.direction === "out" ? -Math.abs(minor) : Math.abs(minor);
+    const mag = Math.abs(minor);
+    const tip = computeTip(mag, this.tipText, currency);
+    if (this.tipText.trim() && tip == null) {
+      new import_obsidian9.Notice("Tip not understood \u2014 use e.g. 20% or 5.00");
+      return;
+    }
+    const tipMinor = tip != null ? tip : 0;
+    const total = mag + tipMinor;
+    const signed = this.direction === "out" ? -total : total;
+    let memo = this.memo.trim();
+    if (tipMinor !== 0) {
+      const note = `incl. ${formatMoney(tipMinor, currency)} tip`;
+      memo = memo ? `${memo} \xB7 ${note}` : note;
+    }
     let payee = this.payee.trim() || void 0;
     let flag;
     if (!this.target && this.snapshot) {
@@ -2733,7 +2803,7 @@ var TransactionModal = class extends BottomSheetModal {
       date: this.date,
       accountId: this.accountId,
       payee,
-      memo: this.memo.trim() || void 0,
+      memo: memo || void 0,
       status: this.cleared ? "cleared" : "uncleared",
       flag,
       postings: [posting]

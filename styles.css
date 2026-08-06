@@ -62,6 +62,8 @@
 .tr-seg-btn { min-height: 34px; padding: 0 14px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.8rem; }
 .tr-seg-btn.is-on { background: var(--interactive-accent); color: var(--text-on-accent); }
 .tr-amount-row { display: flex; flex-direction: column; gap: 4px; }
+.tr-tip-total { margin: 2px 0 8px; text-align: right; font-variant-numeric: tabular-nums; }
+.tr-tip-total:empty { display: none; }
 .tr-txn-buttons { display: flex; gap: 8px; margin-top: 12px; }
 .tr-txn-buttons .tr-primary { flex: 1; }
 /* accounts + register */
